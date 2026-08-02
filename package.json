@@ -1,0 +1,9 @@
+{
+  "name": "ti",
+  "version": "0.1.0",
+  "description": "Minimal coding agent in one file, modeled after pi (badlogic/pi-mono)",
+  "type": "module",
+  "scripts": {
+    "start": "node agent.ts"
+  }
+}
