@@ -15,9 +15,9 @@
 
 ### 第 1 站：`src/types.ts`（31 行）—— 全项目的「词汇表」
 
-- 看点：`Block` 三选一（`TextBlock | ToolUse | ToolResult`）与 `Message`
-- 核心决策：内部消息格式为什么是 Anthropic 风格？——内容块模型表达力更强
-  （文本与工具调用混排保序、参数是对象），翻译只发生在协议边界。详见附录 A
+- 看点：三种消息的联合（`UserMessage | AssistantMessage | ToolResultMessage`）与两种内容块
+- 核心决策：内部消息格式为什么是**自定义**的（pi 同款）？——不绑定任何一家 API 的
+  线格式，各家协议在 llm/ 边界双向翻译。详见附录 A
 - `LlmResult`：两条协议调用完归一成同一形状，core 因此完全无感
 
 ### 第 2 站：`src/config/index.ts`（79 行）—— 三处全局状态之一
@@ -47,8 +47,8 @@
     **TCP 包边界不对齐事件边界**，不完整的帧留到下次拼。流式解析最易错的点
   - `anthropic.ts`：事件类型驱动的状态机。重点是 `content_block_delta` 的两种增量
     （文本直接回调打印 vs 工具参数累积 JSON 分片）与 `filter(Boolean)` 兜底
-  - `openai.ts`：三段式（1 消息转换 → 2 流式累积 → 3 组装回 Block[]）。
-    **与 anthropic.ts 对比着读**：本质同一件事（增量 → 完整 Block[]），事件形状不同——
+  - `openai.ts`：三段式（toWire 出站转换 → 流式累积 → 组装回 AssistantMessage）。
+    **与 anthropic.ts 对比着读**：本质同一件事（增量 → AssistantMessage），事件形状不同——
     这就是「适配层」：把两种外部方言翻译成同一种内部语言
   - `index.ts`：19 行纯分发，体会「core 只面对 `callLLM` 一个函数」
 - 思考题：`finish_reason: "length"` 为什么映射成 `"max_tokens"`？
@@ -90,15 +90,15 @@ agent.ts    第 1 次循环：callLLM(getProvider(), ...)
   ↓
 llm/index.ts    protocol==="anthropic" → callAnthropic
 llm/anthropic.ts 拼请求体(system/messages/tools) → fetch → sseJson 逐帧
-  ↓ 模型流式返回：先文字后 tool_use
+  ↓ 模型流式返回：先文字后 toolCall
 sse.ts      TCP 分片 → 完整事件 JSON
   ↓ onText 实时打到终端（ui.text → render.ts）
-agent.ts    收到完整 LlmResult → push assistant 消息 → 发现 tool_use
+agent.ts    收到 AssistantMessage（自带 usage/stopReason）→ push 入历史 → 发现 toolCall
   ↓ ui.toolCall() 打印 "→ read package.json"
 tools/index.ts  runTool("read", {path}) → read.ts
   ↓ 读文件、加行号、truncate
-agent.ts    ui.result() 预览前 5 行 → push tool_result(role:"user") → 第 2 次循环
-  ↓ 这次模型回纯文本，无 tool_use → break
+agent.ts    ui.result() 预览前 5 行 → push toolResult 消息（独立角色）→ 第 2 次循环
+  ↓ 这次模型回纯文本，无 toolCall → break
 main.ts     console.log() 换行，进程结束
 ```
 
@@ -106,7 +106,7 @@ main.ts     console.log() 换行，进程结束
 
 ## 毕业自测题（答得出 = 理解到位）
 
-1. 为什么 tool_result 要以 `role:"user"` 回灌？OpenAI 路径在哪一步、怎么变成 `role:"tool"`？
+1. toolResult 为什么是平铺的独立消息（而不是塞回 user 消息）？两条协议在边界分别怎么处理它？
 2. 新增一个协议（比如 Gemini）要动哪几个文件？哪些文件**保证不用动**？
 3. `/model anthropic` 切换后，下一轮 agentTurn 怎么用到新 provider？（追 `getProvider` 调用时机）
 4. 为什么 `AgentUI` 要注入，而不是 core 直接 `console.log`？（至少两个收益）
@@ -114,39 +114,40 @@ main.ts     console.log() 换行，进程结束
 6. 模型返回的 tool_use 参数 JSON 损坏，有几道防线？分别在哪？
 7. 全局可变状态有三处，目前实现了几处、在哪？（另外两处是 D2/D4 的内容）
 
-## 附录 A：为什么内部消息格式是「Anthropic 风格」
+## 附录 A：内部消息格式——为什么从「Anthropic 线格式」换成「自定义格式」
 
-指 `src/types.ts` 的内存数据结构照搬 Anthropic Messages API 的消息模型：
+> 2026-08-18 前：内部直接借用 Anthropic 线格式（`tool_use`/`tool_result` 块塞 user 消息）。
+> 之后：自定义格式（pi 同款思路）。本附录记录这次决策。
+
+当前格式（`src/types.ts`）：三种消息的可辨识联合 + 两种内容块——
 
 ```jsonc
-// 内部格式 ≈ Anthropic 形状：content 是块数组，文本与工具调用混排保序
+// 自定义内部格式：块模型学 Anthropic（混排保序、参数是对象），
+// 消息角色学 OpenAI（toolResult 平铺为独立消息，不塞进 user）
 { role: "assistant", content: [
   { type: "text", text: "我看一下" },
-  { type: "tool_use", id: "t1", name: "read", input: { path: "a.ts" } } ]}  // input 是对象
-{ role: "user", content: [
-  { type: "tool_result", tool_use_id: "t1", content: "...", is_error: false } ]}
-
-// 对照 OpenAI 形状：文本与调用拆成两个字段；参数是字符串；结果是独立的 role:"tool" 消息
-{ role: "assistant", content: "我看一下",
-  tool_calls: [{ id: "t1", type: "function",
-                 function: { name: "read", arguments: "{\"path\":\"a.ts\"}" } }] }
-{ role: "tool", tool_call_id: "t1", content: "..." }
+  { type: "toolCall", id: "t1", name: "read", arguments: { path: "a.ts" } } ],
+  stopReason: "toolUse", usage: { input: 123, output: 45 } }   // 元数据挂在消息上
+{ role: "toolResult", toolCallId: "t1", toolName: "read", content: "...", isError: false }
 ```
 
-**为什么内部流转也需要格式**：agent 的消息不是字符串，是结构化数据（调用有 id/名字/参数，
-结果按 id 关联、带错误标记）。loop 每轮都要读写这个结构，「无风格」不存在——
-总要选一种内存表示。真正的选择是：
+三个候选方案的对比：
 
 | 方案 | 后果 |
 |---|---|
-| 自己发明中立格式 | 写两套双向翻译器，工作量翻倍，零收益 |
-| 用 OpenAI 格式当内部格式 | arguments 是字符串，core 反复 parse/stringify；不保序；低表达力向上映射丢信息 |
-| **Anthropic 格式当内部格式**（本项目） | anthropic 路径零转换直通；openai 路径只在边界翻译一次；高表达力向下映射无损 |
+| OpenAI 线格式当内部格式 | 表达力最弱：arguments 是字符串要反复 parse/stringify；文本与工具调用顺序丢失 |
+| Anthropic 线格式当内部格式（旧方案） | 字段钉死：想给消息挂 usage/timestamp 没地方放；别家特有的往返数据（如 Gemini thoughtSignature）没口袋装；session 落盘的是私有形状，换格式要迁移 |
+| **自定义格式（现方案，pi 同款）** | 两条协议路径都在边界翻译；格式完全按 agent 需要设计，加可选字段向后兼容 |
 
-一句话：**内部格式选表达力更强的那个，让翻译只发生在不得不发生的地方（协议边界）**——
-经典防腐层思路，`core/agent.ts` 里一个协议相关的 if 都没有。
-注意：选 Anthropic 风格 ≠ 偏向 Anthropic；默认 provider 是 DeepSeek（OpenAI 协议），不受影响。
+**为什么换的时机是「现在」**：D2（session 持久化）马上要把消息落盘——落盘前换格式零迁移成本，
+落盘后换就要处理旧 session 文件。这是改动最便宜的最后一个窗口。
 
-**参考对象**：pi 就是这样（pi-mono `packages/ai` 的内部类型以 Anthropic content block 为蓝本，
-每个 provider 一个 transform 在边界翻译——本项目的 `types.ts`+`llm/` 是其极简版）。
+**边界翻译规则**（都在 `llm/` 内，core 无感）：
+- Anthropic 出站：toolCall→tool_use（arguments→input）；连续 toolResult 归并进一条 user 消息
+- OpenAI 出站：toolCall→tool_calls（arguments 序列化为字符串）；toolResult 1:1 → role:"tool"
+- 入站：两路流式事件都归一成 AssistantMessage；stopReason 归一化为 stop/length/toolUse
+
+**参照**：pi 的内部类型（pi-mono `packages/ai/src/types.ts:451-576`）——同样的杂交：
+块模型取自 Anthropic，toolResult 平铺学 OpenAI，外加 timestamp/cost/thinking 等扩展。
+ti 只抄骨架，扩展字段将来需要时再加（YAGNI）。
 dsh 的消息层实现未确认（公开信息以 OpenAI 兼容协议为中心），待读源码验证。

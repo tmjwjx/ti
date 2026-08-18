@@ -5,8 +5,8 @@
  * Anthropic 协议直接作为 tools 下发；OpenAI 协议在请求时包一层 {type:"function"}。
  * 4 个工具的参数名与描述逐一对齐 pi 的 read/write/edit/bash。
  *
- * runTool 返回值即 tool_result 的内容；抛出的异常会在 agentTurn 里被捕获
- * 并转成 is_error=true 的 tool_result 回灌给模型（模型通常能据此自我纠正）。
+ * runTool 返回值即 toolResult 的内容；抛出的异常会在 agentTurn 里被捕获
+ * 并转成 isError=true 的 toolResult 消息回灌给模型（模型通常能据此自我纠正）。
  */
 import { readTool } from "./read.ts";
 import { writeTool } from "./write.ts";

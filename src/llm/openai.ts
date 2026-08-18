@@ -1,16 +1,37 @@
 /**
  * OpenAI chat/completions 兼容协议（DeepSeek 官方 API 等）。
- * 在收发边界做格式转换，内部仍是统一的 Block[]：
- * - 发出：system 提示词 → 首条 system 消息；assistant 的 tool_use → tool_calls 数组
- *   （arguments 是 JSON 字符串）；每个 tool_result → 一条独立的 role:"tool" 消息
+ * 收发边界负责「自定义内部格式 ↔ OpenAI 线格式」的双向翻译：
+ * - 发出：system 提示词 → 首条 system 消息；assistant 的 ToolCall → tool_calls 数组
+ *   （arguments 序列化成 JSON 字符串）；每条 toolResult 消息 1:1 → role:"tool" 消息
  * - 收回：delta.content 是文本增量；delta.tool_calls 按 index 累积
- *   （id/name 只出现在首个分片，arguments 逐片拼接）；
- *   finish_reason "length" 映射为 max_tokens，复用 agentTurn 的截断保护
+ *   （id/name 只出现在首个分片，arguments 逐片拼接后一次性 JSON.parse）；
+ *   finish_reason 归一化（"length"→length、"tool_calls"→toolUse）
  *
  * 无状态：provider、系统提示词与工具 schema 全部由调用方传入。
  */
-import type { Block, LlmResult, Message, ProviderConf, TextBlock, ToolUse } from "../types.ts";
+import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
+
+/** 内部消息 → OpenAI chat 格式 */
+function toWire(systemPrompt: string, messages: Message[]): any[] {
+  const oaiMessages: any[] = [{ role: "system", content: systemPrompt }];
+  for (const m of messages) {
+    if (m.role === "user") {
+      oaiMessages.push({ role: "user", content: m.content }); // string 直通；TextContent[] 与 OpenAI 的 text part 同形
+    } else if (m.role === "assistant") {
+      // OpenAI 线格式把文本与工具调用拆成两个字段（混排顺序在此丢失，这是该协议的固有局限）
+      const text = m.content.filter((b): b is TextContent => b.type === "text").map((b) => b.text).join("");
+      const toolCalls = m.content.filter((b): b is ToolCall => b.type === "toolCall").map((tc) => ({
+        id: tc.id, type: "function", function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+      }));
+      oaiMessages.push({ role: "assistant", content: text || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
+    } else {
+      // toolResult 平铺消息与 role:"tool" 天然 1:1
+      oaiMessages.push({ role: "tool", tool_call_id: m.toolCallId, content: m.content });
+    }
+  }
+  return oaiMessages;
+}
 
 export async function callOpenAI(
   provider: ProviderConf,
@@ -18,24 +39,7 @@ export async function callOpenAI(
   messages: Message[],
   tools: any[],
   onText: (delta: string) => void,
-): Promise<LlmResult> {
-  // ---- 1) 消息转换：内部 Block[] → OpenAI chat 格式
-  const oaiMessages: any[] = [{ role: "system", content: systemPrompt }];
-  for (const m of messages) {
-    if (typeof m.content === "string") {
-      oaiMessages.push({ role: m.role, content: m.content });
-    } else if (m.role === "assistant") {
-      const text = m.content.filter((b): b is TextBlock => b.type === "text").map((b) => b.text).join("");
-      const toolCalls = m.content.filter((b): b is ToolUse => b.type === "tool_use").map((tu) => ({
-        id: tu.id, type: "function", function: { name: tu.name, arguments: JSON.stringify(tu.input ?? {}) },
-      }));
-      oaiMessages.push({ role: "assistant", content: text || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
-    } else {
-      // user 角色此时只会是 tool_result 块数组：每个结果一条独立的 tool 消息
-      for (const tr of m.content)
-        if (tr.type === "tool_result") oaiMessages.push({ role: "tool", tool_call_id: tr.tool_use_id, content: tr.content });
-    }
-  }
+): Promise<AssistantMessage> {
   const res = await fetch(`${provider.baseURL}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${provider.apiKey}` },
@@ -44,16 +48,16 @@ export async function callOpenAI(
       max_tokens: 8192,
       stream: true,
       stream_options: { include_usage: true }, // 让最后一个分片携带 token 用量
-      messages: oaiMessages,
+      messages: toWire(systemPrompt, messages),
       tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })),
     }),
   });
   if (!res.ok || !res.body) throw new Error(`API error ${res.status}: ${await res.text()}`);
 
-  // ---- 2) 流式累积
+  // ---- 流式累积
   let text = "";
   const calls: Record<number, { id: string; name: string; args: string }> = {};
-  let stopReason = "end_turn";
+  let stopReason: StopReason = "stop";
   const usage = { input: 0, output: 0 };
   for await (const ev of sseJson(res)) {
     if (ev.usage) {
@@ -73,20 +77,23 @@ export async function callOpenAI(
       if (tc.function?.name) c.name = tc.function.name;
       if (tc.function?.arguments) c.args += tc.function.arguments;
     }
-    if (choice.finish_reason) stopReason = choice.finish_reason === "length" ? "max_tokens" : choice.finish_reason;
+    // finish_reason 方言 → 归一化 StopReason
+    if (choice.finish_reason === "length") stopReason = "length";
+    else if (choice.finish_reason === "tool_calls") stopReason = "toolUse";
+    else if (choice.finish_reason) stopReason = "stop";
   }
 
-  // ---- 3) 组装回内部 Block[]（text 在前，tool_use 按 index 顺序）
-  const content: Block[] = [];
+  // ---- 组装回内部 AssistantMessage（text 在前，ToolCall 按 index 顺序）
+  const content: (TextContent | ToolCall)[] = [];
   if (text) content.push({ type: "text", text });
   for (const c of Object.values(calls)) {
-    let input: any = {};
+    let args: Record<string, any> = {};
     try {
-      input = JSON.parse(c.args || "{}");
+      args = JSON.parse(c.args || "{}");
     } catch {
       /* 参数 JSON 不完整时兜底为空对象 */
     }
-    content.push({ type: "tool_use", id: c.id, name: c.name, input });
+    content.push({ type: "toolCall", id: c.id, name: c.name, arguments: args });
   }
-  return { content, stopReason, usage };
+  return { role: "assistant", content, stopReason, usage };
 }

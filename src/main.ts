@@ -9,9 +9,9 @@
  *   - max_tokens 截断的响应里的工具调用一律报错回灌、绝不执行（参数可能被截断，执行有风险）
  *   - 个人配置目录 ~/.ti/（参考 pi 的 ~/.pi/agent/），settings.json 存 provider/model/apiKey
  *
- * 双协议支持：
+ * 双协议支持（内部消息为自定义格式，协议翻译只发生在 llm/ 边界）：
  *   - anthropic：Anthropic Messages API（官方或 Kimi 等兼容端点）
- *   - openai：  OpenAI chat/completions 兼容协议（DeepSeek 官方 API 等），内部统一转成 Block[]
+ *   - openai：  OpenAI chat/completions 兼容协议（DeepSeek 官方 API 等）
  *
  * 零 npm 依赖：Node >= 22.18（原生 type-stripping 免 flag 直接运行 .ts）。
  *

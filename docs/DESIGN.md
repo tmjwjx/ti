@@ -7,8 +7,8 @@
 
 1. **模块化单职责**：按层拆分，每个文件一个明确职责、可独立理解、可独立测试；不设行数硬指标，职责清晰为准
 2. **零依赖**：只用 Node 标准库（fs/path/os/readline/child_process/crypto）
-3. **协议无关内核**：循环层/工具层只面对内部 `Block[]` 消息结构与 `ProviderConf`，新增功能不碰协议转换层
-4. **失败就地回灌**：工具/权限/中断的失败都转成 `is_error` 的 tool_result 回灌模型，loop 永不崩溃
+3. **协议无关内核**：循环层/工具层只面对自定义内部消息格式（`types.ts` 的消息联合）与 `ProviderConf`，新增功能不碰协议转换层
+4. **失败就地回灌**：工具/权限/中断的失败都转成 `isError` 的 toolResult 消息回灌模型，loop 永不崩溃
 5. **状态三处**：对话状态 = `messages[]`（内存）→ `~/.ti/sessions/*.jsonl`（持久化）；配置 = `~/.ti/settings.json`；输入历史 = `~/.ti/history`
 6. **免构建**：Node type-stripping 直接运行 `.ts`；相对 import 必须带 `.ts` 扩展名；只用可擦除语法（无 enum/namespace/参数属性）
 
@@ -24,7 +24,7 @@ ti/
 │   └── smoke.mjs             # F8 冒烟测试（内置双协议 mock server + 断言）
 └── src/
     ├── main.ts               # 唯一入口（薄）：shebang、CLI 参数解析、装配、-c/--resume、单发/REPL 分发
-    ├── types.ts              # 领域模型（纯类型）：Block / Message / ProviderConf / Skill / SessionMeta…
+    ├── types.ts              # 领域模型（纯类型）：Message 联合 / 内容块 / ProviderConf / Skill / SessionMeta…
     ├── cli/                  # 接口层：终端交互适配（不被任何模块依赖）
     │   ├── repl.ts           #   REPL 主循环、斜杠命令（/model /provider /compact /cost /clear）
     │   ├── render.ts         #   终端渲染：ANSI 颜色、工具参数摘要、结果预览

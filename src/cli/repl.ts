@@ -31,7 +31,7 @@ export async function repl(messages: Message[], ctx: AgentContext): Promise<void
       console.log(dim("(context cleared)"));
     } else if (line === "/model" || line.startsWith("/model ")) {
       // /model 切换：参数是 provider 名 → 重新解析该 provider（连带其默认模型）；
-      // 其他名字 → 仅换当前 provider 下的模型。历史消息是协议无关的 Block[]，跨 provider 无缝
+      // 其他名字 → 仅换当前 provider 下的模型。历史消息是协议无关的自定义格式，跨 provider 无缝
       const arg = line.slice(6).trim();
       try {
         if (!arg) {
