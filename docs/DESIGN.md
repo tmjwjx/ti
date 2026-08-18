@@ -18,8 +18,8 @@
 
 ```
 ti/
-├── package.json / README.md / ARCHITECTURE.md / LICENSE(MIT)
-├── docs/                     # PRD.md（需求）· DESIGN.md（本文档）
+├── package.json / README.md / LICENSE(MIT)
+├── docs/                     # PRD.md（需求）· DESIGN.md（本文档）· ARCHITECTURE.md
 ├── scripts/
 │   └── smoke.mjs             # F8 冒烟测试（内置双协议 mock server + 断言）
 └── src/
@@ -180,7 +180,7 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
   "type": "module",
   "bin": { "ti": "./src/main.ts" },   // npm 为 bin 建 shim/symlink，node 直接跑 .ts
   "engines": { "node": ">=22.18.0" }, // type-stripping 免 flag 最低版本
-  "files": ["src", "ARCHITECTURE.md", "docs"],
+  "files": ["src", "docs"],
   "scripts": { "start": "node src/main.ts", "test": "node scripts/smoke.mjs" },
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/tmjwjx/ti.git" },

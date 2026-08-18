@@ -74,6 +74,6 @@ CLI（--provider / -m） > 环境变量（TI_PROVIDER / TI_MODEL / TI_BASE_URL �
 | 文件 | 说明 |
 |---|---|
 | `src/` | 全部实现，四层模块化（含详细中文注释）：`cli/`（接口层）→ `core/`（应用/领域层）→ `llm/`+`tools/`+`config/`（适配层）→ `types.ts`（纯类型），入口 `src/main.ts`。详见 `docs/DESIGN.md` §2 |
-| `ARCHITECTURE.md` | 架构文档：分层图、agent loop 流程图、时序图、与 pi 的对应关系 |
+| `docs/ARCHITECTURE.md` | 架构文档：分层图、agent loop 流程图、时序图、与 pi 的对应关系 |
 | `docs/` | `PRD.md`（v1.0 需求）· `DESIGN.md`（详细设计） |
 | `package.json` | `type: module` + `npm start` |

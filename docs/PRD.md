@@ -89,7 +89,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
   "name": "@tmjwjx/ti",
   "bin": { "ti": "./src/main.ts" },     // src/main.ts 顶部加 #!/usr/bin/env node
   "engines": { "node": ">=22.18.0" },   // type-stripping 免 flag 的最低版本
-  "files": ["src", "ARCHITECTURE.md", "docs"],
+  "files": ["src", "docs"],
   "license": "MIT"
 }
 ```
@@ -109,8 +109,8 @@ src/                # 分层源码（完整树与依赖规则见 DESIGN.md §2�
   config/           # 配置适配：paths.ts（~/.ti 路径 + TI_HOME 覆盖）· index.ts
 package.json        # bin→src/main.ts / engines / files / license
 README.md           # 英文优先 + 中文小节（面向 npm 页面）
-ARCHITECTURE.md / LICENSE(MIT)
-docs/               # PRD.md（本文档）· DESIGN.md
+LICENSE(MIT)
+docs/               # PRD.md（本文档）· DESIGN.md · ARCHITECTURE.md
 scripts/smoke.mjs   # mock 冒烟测试（F8）
 ```
 
