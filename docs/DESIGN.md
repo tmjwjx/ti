@@ -1,32 +1,68 @@
 # ti v1.0 设计文档
 
 > 版本：v1.0 设计冻结稿 · 日期：2026-08-18 · 对应需求：`docs/PRD.md`（v1.0 范围已冻结）
-> 实现约束：单文件 `agent.ts`、零运行时依赖、Node ≥22.18、双协议（Anthropic / OpenAI 兼容）
+> 实现约束：模块化 `src/` 目录、零运行时依赖、Node ≥22.18、双协议（Anthropic / OpenAI 兼容）、免构建直发
 
 ## 1. 设计原则
 
-1. **单文件分区**：全部逻辑仍在 `agent.ts`，按分区横幅组织；v1.0 目标 ≤ ~1100 行（含中文注释），超出再拆分
+1. **模块化单职责**：按层拆分为小文件，每个文件一个明确职责、可独立理解；单文件 ≤ ~250 行，超出说明职责没拆对
 2. **零依赖**：只用 Node 标准库（fs/path/os/readline/child_process/crypto）
 3. **协议无关内核**：循环层/工具层只面对内部 `Block[]` 消息结构与 `ProviderConf`，新增功能不碰协议转换层
 4. **失败就地回灌**：工具/权限/中断的失败都转成 `is_error` 的 tool_result 回灌模型，loop 永不崩溃
 5. **状态三处**：对话状态 = `messages[]`（内存）→ `~/.ti/sessions/*.jsonl`（持久化）；配置 = `~/.ti/settings.json`；输入历史 = `~/.ti/history`
+6. **免构建**：Node type-stripping 直接运行 `.ts`；相对 import 必须带 `.ts` 扩展名；只用可擦除语法（无 enum/namespace/参数属性）
 
-## 2. v1.0 的 agent.ts 分区图
+## 2. 文件架构
 
 ```
-文件头注释 → imports
-配置体系（现有）            + permissions 配置项、--ask / -c / --resume 参数
-类型定义（现有）            + SessionMeta / Skill 类型
-系统提示词（现有）          + skills 清单注入（F9）
-会话管理（新, F1）          SessionWriter / loadSession / listSessions
-中断（新, F2）              全局 currentAbort + SIGINT 处理
-权限（新, F3）              confirmToolCall() 钩子
-工具定义与实现（现有，不变）
-双协议调用（现有）          + fetch(signal)、usage 累计回调
-agent 循环（现有）          + 权限钩子 / abort 贯穿 / session 追加写 / totals 累计（F6）
-REPL（现有）                + /compact（F4）/ /cost（F6）/ /provider（F10）、历史与多行（F5）
-入口（现有）                + -c / --resume 恢复流程、session 初始化
+ti/
+├── package.json            # bin → src/main.ts；files 白名单 ["src", "docs", "ARCHITECTURE.md"]
+├── agent.ts                # 兼容壳：import "./src/main.ts"（不发布，本地习惯 node agent.ts 不受影响）
+├── README.md / ARCHITECTURE.md / LICENSE(MIT)
+├── docs/                   # PRD.md（需求）· DESIGN.md（本文档）
+├── scripts/
+│   └── smoke.mjs           # F8 冒烟测试：内置双协议 mock server + 断言
+└── src/
+    ├── main.ts             # 入口：shebang、CLI 参数解析、-c/--resume 恢复流程、单发/REPL 分发
+    ├── config.ts           # 配置体系：预设、settings.json 加载、resolveProvider()、当前 provider 状态
+    ├── types.ts            # Block / Message / ProviderConf / Skill / SessionMeta 等共享类型
+    ├── system-prompt.ts    # 系统提示词构建（AGENTS.md/CLAUDE.md 注入 + skills 清单注入）
+    ├── skills.ts           # F9：skills 目录扫描 + frontmatter 解析（name/description）
+    ├── session.ts          # F1：SessionWriter / loadSession / listSessions / compact 标记
+    ├── permissions.ts      # F3：confirmToolCall() + readOneLine()（直读 stdin，不建第二 rl）
+    ├── render.ts           # ANSI 颜色、工具参数摘要、结果预览
+    ├── agent.ts            # 循环层：agentTurn（abort 贯穿、权限钩子、session 追写、totals 累计）
+    ├── repl.ts             # REPL：for-await 循环、斜杠命令、历史持久化、多行续行、/compact
+    ├── llm/
+    │   ├── index.ts        # callLLM() 协议分发 + LlmResult 类型
+    │   ├── sse.ts          # sseJson() 通用 SSE 帧解析（两协议共用）
+    │   ├── anthropic.ts    # Anthropic Messages 协议（/v1/messages）
+    │   └── openai.ts       # OpenAI 兼容协议（/chat/completions，收发边界格式转换）
+    └── tools/
+        ├── index.ts        # TOOLS schema 定义 + runTool() 分发
+        ├── read.ts         # 各工具单文件实现，对齐 pi 的 tools/ 目录组织
+        ├── write.ts
+        ├── edit.ts
+        └── bash.ts
+        └── truncate.ts     # 输出头部截断（2000 行 / 50KB）
 ```
+
+**职责与依赖规则**（import 单向、无环）：
+
+```
+types     ← 纯类型，谁都可引用
+config    ← 被 main/repl/agent/llm 引用；拥有 settings 与当前 provider 状态
+llm/*     ← 无状态；每次调用接收 ProviderConf 参数（不读全局）
+tools/*   ← 无状态；纯函数式实现
+session   ← 拥有当前 SessionWriter（首条消息时惰性创建）；暴露 recordMessage()
+render    ← 纯展示函数
+permissions ← 被 agent 调用；拥有模式(auto/ask)与会话级放行集合
+agent     ← 组装者：llm + tools + permissions + session + render；拥有 totals 与 currentAbort
+system-prompt ← 被 main 调用一次；依赖 skills
+repl/main ← 入口层
+```
+
+**全局可变状态只住三处**：`config.ts`（当前 provider）、`session.ts`（当前会话写入器）、`agent.ts`（totals、currentAbort）。其余模块全部无状态，便于测试与日后拆分。
 
 ## 3. 功能详细设计
 
@@ -130,19 +166,19 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 
 ## 4. 打包与发布设计（F7）
 
-- `agent.ts` 第一行加 `#!/usr/bin/env node`（必须位于文件头注释之前）
+- `src/main.ts` 第一行加 `#!/usr/bin/env node`（必须位于文件头注释之前）
 - `package.json`：
 
 ```jsonc
 {
   "name": "@tmjwjx/ti",
   "version": "0.2.0",                 // 跟随里程碑，v1.0 时升 1.0.0
-  "description": "Minimal coding agent in one file, modeled after pi. 极简单文件 coding agent",
+  "description": "Minimal coding agent modeled after pi. 极简 coding agent（零依赖、免构建）",
   "type": "module",
-  "bin": { "ti": "./agent.ts" },
+  "bin": { "ti": "./src/main.ts" },   // npm 为 bin 建 shim/symlink，node 直接跑 .ts
   "engines": { "node": ">=22.18.0" }, // type-stripping 免 flag 最低版本
-  "files": ["agent.ts", "ARCHITECTURE.md", "docs"],
-  "scripts": { "start": "node agent.ts", "test": "node scripts/smoke.mjs" },
+  "files": ["src", "ARCHITECTURE.md", "docs"],
+  "scripts": { "start": "node src/main.ts", "test": "node scripts/smoke.mjs" },
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/tmjwjx/ti.git" },
   "keywords": ["coding-agent", "llm", "cli", "deepseek", "anthropic"]
@@ -172,7 +208,7 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 
 | 风险/取舍 | 决策 |
 |---|---|
-| 单文件膨胀（v1.0 预计 ~1100 行） | 接受；超 ~1200 行才按「配置/协议/工具/交互」拆 4 文件，bin 入口不变 |
+| 模块化拆分引入 import 管理成本 | 约定依赖方向（§2 规则）+ 纯类型/无状态模块为主；拆分本身作为 v0.2 的第一步独立提交（行为不变的纯搬迁，冒烟回归） |
 | Ctrl+C 语义改变（REPL 内从「退出」变「中断 turn」） | 空闲时仍退出；启动横幅注明 |
 | 权限提问与 for-await 主循环的 stdin 竞争 | readOneLine 直接读 stdin、不建第二 rl 实例；非 TTY 一律 deny |
 | session 文件无锁/无压缩 | 单用户单进程工具，线性追加足够；pi 同样从简 |
@@ -183,7 +219,7 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 
 | 里程碑 | 内容 | 依赖 |
 |---|---|---|
-| v0.2 | F1 session + F2 中断 | F1 的 pushMessage 收敛先行；F2 依赖 F1 的协议合法性设计 |
+| v0.2 | **R0 拆分重构**（单文件 → §2 的 src/ 结构，行为不变、冒烟回归）→ F1 session + F2 中断 | F1 的 pushMessage 收敛先行；F2 依赖 F1 的协议合法性设计 |
 | v0.3 | F3 权限 + F4 compact + F5 历史/多行 + F6 token 累计 | F4 依赖 F1 的 compact 标记；F3 独立于其他 |
 | v0.4 | F9 skills + F10 /provider | 只动系统提示词与 REPL，互不依赖 |
 | v1.0 | F7 打包 + F8 冒烟测试 + 英文 README + 打磨 | F8 覆盖 v0.2-v0.4 全部场景 |

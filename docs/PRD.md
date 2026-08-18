@@ -61,7 +61,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 - **体积**：包 <100KB；冷启动 <300ms
 - **兼容**：Node ≥22.18（type-stripping 免构建的最低版本；与 dsh 的 ^22.19/>=24 同代际）
 - **安全**：默认权限确认（F3）；apiKey 只读 env 或 `~/.ti/settings.json`（文档建议 chmod 600）；bash 无沙箱（文档明示风险，同 pi）
-- **可维护**：v1.0 保持单文件 + 分区注释；若超 ~1200 行则按「配置/协议/工具/交互」拆 4 个文件，bin 入口不变（打包方案不受影响）
+- **可维护**：`src/` 模块化拆分（按层分文件、单职责，详见 DESIGN.md §2），单文件 ≤ ~250 行；免构建直发（type-stripping），bin 入口固定 `src/main.ts`
 
 ## 6. 技术方案
 
@@ -87,9 +87,9 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 ```jsonc
 {
   "name": "@tmjwjx/ti",
-  "bin": { "ti": "./agent.ts" },        // agent.ts 顶部加 #!/usr/bin/env node
+  "bin": { "ti": "./src/main.ts" },     // src/main.ts 顶部加 #!/usr/bin/env node
   "engines": { "node": ">=22.18.0" },   // type-stripping 免 flag 的最低版本
-  "files": ["agent.ts", "ARCHITECTURE.md", "docs"],
+  "files": ["src", "ARCHITECTURE.md", "docs"],
   "license": "MIT"
 }
 ```
@@ -99,12 +99,18 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 ### 6.3 目录结构（v1.0 目标）
 
 ```
-agent.ts            # 单文件全部逻辑（shebang；超 ~1200 行才拆分）
-package.json        # bin/engines/files/license
+src/                # 模块化源码（完整树与职责见 DESIGN.md §2）
+  main.ts           # 入口（shebang）
+  config.ts / types.ts / system-prompt.ts / skills.ts / session.ts
+  permissions.ts / render.ts / agent.ts / repl.ts
+  llm/              # index.ts(分发) · sse.ts · anthropic.ts · openai.ts
+  tools/            # index.ts(schema+分发) · read.ts · write.ts · edit.ts · bash.ts · truncate.ts
+agent.ts            # 兼容壳（import "./src/main.ts"，不发布）
+package.json        # bin→src/main.ts / engines / files / license
 README.md           # 英文优先 + 中文小节（面向 npm 页面）
 ARCHITECTURE.md     # 架构文档（现状已有）
 LICENSE             # MIT
-docs/PRD.md         # 本文档
+docs/               # PRD.md（本文档）· DESIGN.md
 scripts/smoke.mjs   # mock 冒烟测试（F8）
 ```
 
@@ -113,7 +119,7 @@ scripts/smoke.mjs   # mock 冒烟测试（F8）
 | 版本 | 内容 | 退出条件 |
 |---|---|---|
 | v0.1 ✅ | 核心 loop + 4 工具 + 双协议 + 配置（现状） | 已完成并验证 |
-| v0.2 | F1 session + F2 中断 | 杀进程可恢复；长任务可中断 |
+| v0.2 | R0 拆分重构（单文件 → src/ 模块化，行为不变）+ F1 session + F2 中断 | 冒烟回归通过；杀进程可恢复；长任务可中断 |
 | v0.3 | F3 权限（默认 auto）+ F4 compact + F5 历史 + F6 token 累计 | 验收标准全过 |
 | v0.4 | F9 skills + F10 /provider | 验收标准全过 |
 | v1.0 | F7 打包就绪 + F8 冒烟测试 + 英文 README + 打磨 | `npm pack` 自测通过、`npm test` 全绿；**不发布** |
