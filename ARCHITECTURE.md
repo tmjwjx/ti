@@ -1,7 +1,11 @@
 # ti 架构文档
 
+> **注意**：本文档记录的是 v0.1 单文件版（`agent.ts`，已删除）的架构。
+> 当前实现已按 `docs/DESIGN.md` §2 拆分为 `src/` 四层模块化结构（行为不变）；
+> 分层思想不变，本文将在 v1.0 里程碑按新结构重写。
+
 单文件极简 coding agent，架构参考 [pi](https://github.com/badlogic/pi-mono)（现 earendil-works/pi）。
-全部实现位于 `agent.ts`（~660 行，含详细中文注释），零 npm 依赖，Node ≥ 22.6 直接运行。
+零 npm 依赖，Node ≥ 22.18 直接运行。
 
 ## 总体分层
 

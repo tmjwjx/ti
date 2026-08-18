@@ -1,6 +1,6 @@
 # ti — 极简 coding agent（参考 pi）
 
-单文件 TypeScript 实现的 coding agent，架构照搬 [pi](https://github.com/badlogic/pi-mono)（现 earendil-works/pi）：
+TypeScript 实现的 coding agent，架构照搬 [pi](https://github.com/badlogic/pi-mono)（现 earendil-works/pi）：
 
 - **agent loop**：流式请求 LLM → 执行 tool_use → tool_result 回灌 → 直到模型不再调用工具
 - **4 个工具**（参数与 pi 一致）：`read`（行号+分页）、`write`（自动建父目录）、`edit`（精确替换，oldText 必须唯一，全部针对原文件校验）、`bash`（超时+输出截断+退出码）
@@ -9,17 +9,17 @@
 - **pi 同款保护**：`max_tokens` 截断的响应里的工具调用一律报错回灌，不执行
 - 零 npm 依赖，SSE 流式输出，多轮 REPL + 单发模式
 
-有意省略（pi 有但超出行数预算）：扩展系统、skills、MCP、权限弹窗、plan mode、子 agent、session 持久化、并行工具执行、中断恢复。
+有意省略（pi 有但暂未实现）：扩展系统、skills、MCP、权限弹窗、plan mode、子 agent、session 持久化、并行工具执行、中断恢复。路线图见 `docs/PRD.md`。
 
 ## 运行
 
-需要 Node ≥ 22.6（原生 type-stripping，无需构建；推荐 Node 26）。零依赖，不用 `npm install`。
+需要 Node ≥ 22.18（原生 type-stripping，无需构建；推荐 Node 26）。零依赖，不用 `npm install`。
 
 ```bash
-node agent.ts                          # 交互 REPL
-node agent.ts -p "创建一个 hello.txt"    # 单发模式
-node agent.ts --provider anthropic     # 切换 provider（默认 deepseek）
-node agent.ts -m deepseek-reasoner     # 切换模型
+node src/main.ts                          # 交互 REPL（或 npm start）
+node src/main.ts -p "创建一个 hello.txt"    # 单发模式
+node src/main.ts --provider anthropic     # 切换 provider（默认 deepseek）
+node src/main.ts -m deepseek-reasoner     # 切换模型
 ```
 
 ## 配置（参考 pi 的 ~/.pi/）
@@ -73,6 +73,7 @@ CLI（--provider / -m） > 环境变量（TI_PROVIDER / TI_MODEL / TI_BASE_URL �
 
 | 文件 | 说明 |
 |---|---|
-| `agent.ts` | 全部实现（~660 行含详细中文注释）：配置体系/系统提示词/工具/双协议 SSE/loop/REPL |
+| `src/` | 全部实现，四层模块化（含详细中文注释）：`cli/`（接口层）→ `core/`（应用/领域层）→ `llm/`+`tools/`+`config/`（适配层）→ `types.ts`（纯类型），入口 `src/main.ts`。详见 `docs/DESIGN.md` §2 |
 | `ARCHITECTURE.md` | 架构文档：分层图、agent loop 流程图、时序图、与 pi 的对应关系 |
+| `docs/` | `PRD.md`（v1.0 需求）· `DESIGN.md`（详细设计） |
 | `package.json` | `type: module` + `npm start` |
