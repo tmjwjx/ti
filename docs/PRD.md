@@ -1,6 +1,6 @@
 # ti 产品需求与技术方案文档（PRD）
 
-> 版本：v1.0 草案 · 日期：2026-08-16 · 状态：待评审
+> 版本：v1.0 · 日期：2026-08-16（2026-08-18 范围冻结） · 状态：**范围已冻结**，详细设计见 `docs/DESIGN.md`
 > 包名：`@tmjwjx/ti`（scoped，bin 命令 `ti`）· 仓库：github.com/tmjwjx/ti（暂私有，发布时转公开）
 
 ## 1. 背景与参考对象
@@ -41,7 +41,7 @@ agent loop（流式请求→工具执行→结果回灌→循环）；4 工具�
 | # | 功能 | 描述 | 验收标准 |
 |---|---|---|---|
 | F1 | **session 持久化与恢复** | 消息历史实时追加写入 `~/.ti/sessions/<cwd目录名>-<时间戳>.jsonl`（首行 meta：cwd/provider/model/创建时间）；`ti -c/--continue` 继续当前目录最近一次会话；`ti --resume` 列出最近会话选择 | 杀掉进程后 `ti -c` 能完整接续上下文；session 文件可直接 `cat` 阅读 |
-| F2 | **中断** | agent 执行期间按 Esc/Ctrl+C 中断当前 turn（AbortController 贯穿 fetch 与 bash spawn），回到提示符不退出；空闲时 Ctrl+C 退出 | 长跑 bash 命令能被打断；被打断的 turn 以「已中断」标记写入历史，loop 状态合法 |
+| F2 | **中断** | agent 执行期间按 Ctrl+C 中断当前 turn（AbortController 贯穿 fetch 与 bash spawn），回到提示符不退出；空闲时 Ctrl+C 退出（Esc 不做，见 DESIGN.md §3-F2） | 长跑 bash 命令能被打断；被打断的 turn 以「已中断」标记写入历史，loop 状态合法 |
 | F3 | **权限模式（默认 auto，pi 风格）** | 默认不打扰：所有工具直接执行（与 pi 一致）；配置 `permissions:"ask"` 或启动加 `--ask` 才启用确认——write/edit/bash 执行前弹 `y` 本次 / `a` 本会话同类放行 / `n` 拒绝（错误回灌模型）；`read` 永远免确认；非 TTY（管道）无法提问时按拒绝处理并提示 | 默认全程无确认；ask 模式下 write/bash 必先弹确认；拒绝后模型收到权限错误并调整 |
 | F4 | **/compact 上下文压缩** | 把当前消息历史发给模型生成结构化摘要（已完成事项/改动文件/关键决策/待办），替换为单条摘要消息继续会话；原始历史保留在 session 文件 | 压缩后 token 数显著下降；模型能基于摘要正确接续工作 |
 | F5 | **输入体验** | readline 历史持久化到 `~/.ti/history`（上限 1000 条）；支持 `\` 续行多行输入 | 重启后方向键↑能翻出上次会话的命令 |
