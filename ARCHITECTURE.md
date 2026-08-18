@@ -1,7 +1,7 @@
 # ti 架构文档
 
 单文件极简 coding agent，架构参考 [pi](https://github.com/badlogic/pi-mono)（现 earendil-works/pi）。
-全部实现位于 `agent.ts`（~490 行，含详细中文注释），零 npm 依赖，Node ≥ 22.6 直接运行。
+全部实现位于 `agent.ts`（~660 行，含详细中文注释），零 npm 依赖，Node ≥ 22.6 直接运行。
 
 ## 总体分层
 
@@ -9,13 +9,20 @@
 ┌────────────────────────────────────────────────────────────────────┐
 │                              agent.ts                              │
 │                                                                    │
+│  配置层    CLI 参数 > 环境变量 > ~/.ti/settings.json > 内置预设      │
+│              resolveProvider() → { protocol, baseURL, model, key } │
+│              预设：deepseek(默认, OpenAI 协议) / anthropic          │
+│                                                                    │
 │  交互层    REPL (readline 异步迭代)        单发模式 (-p prompt)     │
 │              └──────────────┬──────────────────┘                   │
 │                             ▼                                      │
 │  循环层    agentTurn(messages)   ←—— 唯一状态：messages[] 数组      │
 │              │  流式请求 → 执行工具 → 结果回灌 → 循环               │
 │              ▼                                                     │
-│  传输层    callLLM()  ── fetch + SSE 流式解析 ──▶ Anthropic 兼容端点│
+│  传输层    callLLM() 协议分发 ── 共用 sseJson() SSE 帧解析          │
+│              ├─ callAnthropic() ─▶ /v1/messages (官方/Kimi 等)     │
+│              └─ callOpenAI()    ─▶ /chat/completions (DeepSeek 等) │
+│                   收发边界做格式转换，内部统一为 Block[]             │
 │              │  onText 增量回调 ───────────────▶ stdout 实时显示    │
 │              ▼                                                     │
 │  工具层    runTool(name, input)                                    │
@@ -121,8 +128,9 @@ sequenceDiagram
 | `TOOLS` + `runTool()` | `packages/coding-agent/src/core/tools/{read,write,edit,bash}.ts` | 参数 schema 与描述逐一对齐；去掉 TUI 渲染与可插拔 operations |
 | `truncate()` | `core/tools/truncate.ts` | 同样的头部截断：2000 行 / 50KB |
 | `buildSystemPrompt()` | `core/system-prompt.ts` | 同样 <1k tokens；同样加载 AGENTS.md/CLAUDE.md 作为 project_context |
-| `callLLM()` | `packages/ai`（多 provider 统一流式层） | 只保留 Anthropic Messages 协议 + SSE 解析 |
-| `repl()` | `packages/tui` + modes/interactive | pi 是完整 TUI（差分渲染、编辑器组件）；这里是 readline |
+| `callLLM()` → `callAnthropic()` / `callOpenAI()` | `packages/ai`（多 provider 统一流式层） | 双协议（Anthropic Messages / OpenAI chat completions），收发边界做格式转换、内部统一 `Block[]`，共用 `sseJson()` 帧解析 |
+| `resolveProvider()` + `~/.ti/settings.json` | `~/.pi/agent/`（settings.json + auth.json + models.json） | CLI > env > 配置文件 > 内置预设 四级优先级；key 可放配置文件（env 优先） |
+| `repl()` | `packages/tui` + modes/interactive | pi 是完整 TUI（差分渲染、编辑器组件）；这里是 readline + `/model` `/clear` 斜杠命令 |
 
 ## 关键保护机制
 
