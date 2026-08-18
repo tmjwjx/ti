@@ -61,7 +61,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 - **体积**：包 <100KB；冷启动 <300ms
 - **兼容**：Node ≥22.18（type-stripping 免构建的最低版本；与 dsh 的 ^22.19/>=24 同代际）
 - **安全**：默认权限确认（F3）；apiKey 只读 env 或 `~/.ti/settings.json`（文档建议 chmod 600）；bash 无沙箱（文档明示风险，同 pi）
-- **可维护**：`src/` 模块化拆分（按层分文件、单职责，详见 DESIGN.md §2），单文件 ≤ ~250 行；免构建直发（type-stripping），bin 入口固定 `src/main.ts`
+- **可维护**：`src/` 模块化拆分（按层分文件、单职责，详见 DESIGN.md §2；不设行数硬指标，职责清晰为准）；免构建直发（type-stripping），bin 入口固定 `src/main.ts`
 
 ## 6. 技术方案
 
