@@ -4,6 +4,6 @@
   "description": "Minimal coding agent in one file, modeled after pi (badlogic/pi-mono)",
   "type": "module",
   "scripts": {
-    "start": "node agent.ts"
+    "start": "node src/main.ts"
   }
 }
