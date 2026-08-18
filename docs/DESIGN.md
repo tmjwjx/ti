@@ -14,55 +14,56 @@
 
 ## 2. 文件架构
 
+分层思想借鉴干净架构与优秀开源 CLI（pi 的「核心运行时 × CLI 应用」分离、企业服务的接口/应用/领域/基础设施四层）：**接口层（cli/）→ 应用层（core/）→ 适配层（llm/ tools/ config/）**，依赖只能由外向内，内层不知道外层的存在。
+
 ```
 ti/
-├── package.json            # bin → src/main.ts；files 白名单 ["src", "docs", "ARCHITECTURE.md"]
-├── agent.ts                # 兼容壳：import "./src/main.ts"（不发布，本地习惯 node agent.ts 不受影响）
-├── README.md / ARCHITECTURE.md / LICENSE(MIT)
-├── docs/                   # PRD.md（需求）· DESIGN.md（本文档）
+├── package.json / README.md / ARCHITECTURE.md / LICENSE(MIT)
+├── docs/                     # PRD.md（需求）· DESIGN.md（本文档）
 ├── scripts/
-│   └── smoke.mjs           # F8 冒烟测试：内置双协议 mock server + 断言
+│   └── smoke.mjs             # F8 冒烟测试（内置双协议 mock server + 断言）
 └── src/
-    ├── main.ts             # 入口：shebang、CLI 参数解析、-c/--resume 恢复流程、单发/REPL 分发
-    ├── config.ts           # 配置体系：预设、settings.json 加载、resolveProvider()、当前 provider 状态
-    ├── types.ts            # Block / Message / ProviderConf / Skill / SessionMeta 等共享类型
-    ├── system-prompt.ts    # 系统提示词构建（AGENTS.md/CLAUDE.md 注入 + skills 清单注入）
-    ├── skills.ts           # F9：skills 目录扫描 + frontmatter 解析（name/description）
-    ├── session.ts          # F1：SessionWriter / loadSession / listSessions / compact 标记
-    ├── permissions.ts      # F3：confirmToolCall() + readOneLine()（直读 stdin，不建第二 rl）
-    ├── render.ts           # ANSI 颜色、工具参数摘要、结果预览
-    ├── agent.ts            # 循环层：agentTurn（abort 贯穿、权限钩子、session 追写、totals 累计）
-    ├── repl.ts             # REPL：for-await 循环、斜杠命令、历史持久化、多行续行、/compact
-    ├── llm/
-    │   ├── index.ts        # callLLM() 协议分发 + LlmResult 类型
-    │   ├── sse.ts          # sseJson() 通用 SSE 帧解析（两协议共用）
-    │   ├── anthropic.ts    # Anthropic Messages 协议（/v1/messages）
-    │   └── openai.ts       # OpenAI 兼容协议（/chat/completions，收发边界格式转换）
-    └── tools/
-        ├── index.ts        # TOOLS schema 定义 + runTool() 分发
-        ├── read.ts         # 各工具单文件实现，对齐 pi 的 tools/ 目录组织
-        ├── write.ts
-        ├── edit.ts
-        └── bash.ts
-        └── truncate.ts     # 输出头部截断（2000 行 / 50KB）
+    ├── main.ts               # 唯一入口（薄）：shebang、CLI 参数解析、装配、-c/--resume、单发/REPL 分发
+    ├── types.ts              # 领域模型（纯类型）：Block / Message / ProviderConf / Skill / SessionMeta…
+    ├── cli/                  # 接口层：终端交互适配（不被任何模块依赖）
+    │   ├── repl.ts           #   REPL 主循环、斜杠命令（/model /provider /compact /cost /clear）
+    │   ├── render.ts         #   终端渲染：ANSI 颜色、工具参数摘要、结果预览
+    │   └── input.ts          #   输入工具：readOneLine（权限提问）、历史持久化、多行续行
+    ├── core/                 # 应用/领域层：业务编排
+    │   ├── agent.ts          #   agentTurn 循环（组装者：llm × tools × permissions × session）
+    │   ├── session.ts        #   F1 会话持久化与恢复（JSONL、compact 标记）
+    │   ├── permissions.ts    #   F3 权限判定（auto/ask 模式、会话级放行集合）
+    │   ├── prompt.ts         #   系统提示词构建（AGENTS.md/CLAUDE.md + skills 清单注入）
+    │   └── skills.ts         #   F9 skills 扫描 + frontmatter 解析
+    ├── llm/                  # 适配层：LLM 协议（无状态，调用时传 ProviderConf）
+    │   ├── index.ts          #   callLLM() 协议分发 + LlmResult
+    │   ├── sse.ts            #   sseJson() 通用 SSE 帧解析（两协议共用）
+    │   ├── anthropic.ts      #   Anthropic Messages 协议（/v1/messages）
+    │   └── openai.ts         #   OpenAI 兼容协议（/chat/completions，收发边界格式转换）
+    ├── tools/                # 适配层：工具（无状态，一工具一文件，对齐 pi 的 tools/ 组织）
+    │   ├── index.ts          #   TOOLS schema 定义 + runTool() 分发
+    │   ├── read.ts / write.ts / edit.ts / bash.ts
+    │   └── truncate.ts       #   输出头部截断（2000 行 / 50KB）
+    └── config/               # 适配层：配置
+        ├── paths.ts          #   ~/.ti 路径集中管理（TI_HOME 环境变量可覆盖，冒烟测试隔离用）
+        └── index.ts          #   内置预设、settings.json 加载、resolveProvider()、当前 provider 状态
 ```
 
-**职责与依赖规则**（import 单向、无环）：
+**依赖规则**（import 单向、无环）：
 
 ```
-types     ← 纯类型，谁都可引用
-config    ← 被 main/repl/agent/llm 引用；拥有 settings 与当前 provider 状态
-llm/*     ← 无状态；每次调用接收 ProviderConf 参数（不读全局）
-tools/*   ← 无状态；纯函数式实现
-session   ← 拥有当前 SessionWriter（首条消息时惰性创建）；暴露 recordMessage()
-render    ← 纯展示函数
-permissions ← 被 agent 调用；拥有模式(auto/ask)与会话级放行集合
-agent     ← 组装者：llm + tools + permissions + session + render；拥有 totals 与 currentAbort
-system-prompt ← 被 main 调用一次；依赖 skills
-repl/main ← 入口层
+types.ts        纯类型，人人可依赖
+适配层 config/ llm/ tools/   可被 core 依赖；llm/ 与 tools/ 完全无状态
+应用层 core/    可依赖适配层与 types；绝不依赖 cli/（不知道终端的存在）
+接口层 cli/     依赖 core；不被任何模块依赖（替换 UI 不影响内核）
+main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 ```
 
-**全局可变状态只住三处**：`config.ts`（当前 provider）、`session.ts`（当前会话写入器）、`agent.ts`（totals、currentAbort）。其余模块全部无状态，便于测试与日后拆分。
+务实说明：core 直接 import 适配层具体实现，不引入接口抽象/DI 容器——项目体量下 ports-and-adapters 全套是过度设计；规则的价值在于**依赖方向单一**，不在形式。
+
+**全局可变状态只住三处**：`config/index.ts`（当前 provider）、`core/session.ts`（当前会话写入器）、`core/agent.ts`（totals、currentAbort）。其余模块全部无状态，便于测试与替换。
+
+**路径管理**：所有 `~/.ti` 下的路径（settings/sessions/history/skills）集中在 `config/paths.ts`，支持 `TI_HOME` 环境变量整体覆盖——冒烟测试（F8）用 `TI_HOME=/tmp/xxx` 做隔离，不再需要 Hack HOME。
 
 ## 3. 功能详细设计
 
@@ -119,6 +120,8 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 ```
 
 **提问实现**：独立 `readOneLine(prompt): Promise<string>`——直接操作 `process.stdin`（`resume()` + `once("data")`），**不新建第二个 readline 实例**（避免与 for-await 的主 rl 抢流）。调用时主 rl 正处于 await agentTurn、未读 stdin，无竞争。
+
+**分层落位**（遵守 §2 依赖规则）：判定逻辑（auto/ask 模式、会话放行集合）放 `core/permissions.ts`，纯逻辑无 IO；终端提问（`readOneLine`/`askToolCall`）放 `cli/input.ts`；`main.ts` 作为组合根把提问函数注入 agent（`setToolCallApprover(fn)`），未注入时默认全部放行——core 不依赖 cli，且 agent 可脱离终端独立测试。
 
 **拒绝处理**：`deny` → 不执行，结果为 `is_error:true, "Permission denied by user"` 回灌（模型据此换方案）。`a` 放行的工具名存模块级 `Set<string>`，仅本会话有效。
 

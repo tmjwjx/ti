@@ -99,17 +99,17 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 ### 6.3 目录结构（v1.0 目标）
 
 ```
-src/                # 模块化源码（完整树与职责见 DESIGN.md §2）
-  main.ts           # 入口（shebang）
-  config.ts / types.ts / system-prompt.ts / skills.ts / session.ts
-  permissions.ts / render.ts / agent.ts / repl.ts
-  llm/              # index.ts(分发) · sse.ts · anthropic.ts · openai.ts
-  tools/            # index.ts(schema+分发) · read.ts · write.ts · edit.ts · bash.ts · truncate.ts
-agent.ts            # 兼容壳（import "./src/main.ts"，不发布）
+src/                # 分层源码（完整树与依赖规则见 DESIGN.md §2）
+  main.ts           # 唯一入口（shebang、组合根装配、分发）
+  types.ts          # 领域模型（纯类型）
+  cli/              # 接口层：repl.ts · render.ts · input.ts
+  core/             # 应用/领域层：agent.ts · session.ts · permissions.ts · prompt.ts · skills.ts
+  llm/              # LLM 协议适配：index.ts · sse.ts · anthropic.ts · openai.ts
+  tools/            # 工具适配：index.ts · read/write/edit/bash.ts · truncate.ts
+  config/           # 配置适配：paths.ts（~/.ti 路径 + TI_HOME 覆盖）· index.ts
 package.json        # bin→src/main.ts / engines / files / license
 README.md           # 英文优先 + 中文小节（面向 npm 页面）
-ARCHITECTURE.md     # 架构文档（现状已有）
-LICENSE             # MIT
+ARCHITECTURE.md / LICENSE(MIT)
 docs/               # PRD.md（本文档）· DESIGN.md
 scripts/smoke.mjs   # mock 冒烟测试（F8）
 ```
