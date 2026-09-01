@@ -34,7 +34,7 @@ ti 是一个极简 coding agent CLI，设计主要参考两个开源项目：
 
 ### 4.1 已完成（v0.1 现状）
 
-agent loop（流式请求→工具执行→结果回灌→循环）；4 工具（read/write/edit/bash，参数对齐 pi）；双协议（Anthropic Messages / OpenAI chat completions）；max_tokens 截断保护；配置体系（CLI > env > `~/.ti/settings.json` > 内置预设）；REPL（`/model` `/clear` `/exit`）+ 单发模式；AGENTS.md/CLAUDE.md 自动注入；token 每轮统计。
+agent loop（流式请求→工具执行→结果回灌→循环）；4 工具（read/write/edit/bash，参数对齐 pi）；双协议（Anthropic Messages / OpenAI chat completions）；max_tokens 截断保护；配置体系（CLI > `~/.ti/settings.json` > 预设；不采用环境变量的值）；REPL（`/model` `/clear` `/exit`）+ 单发模式；AGENTS.md/CLAUDE.md 自动注入；token 每轮统计。
 
 ### 4.2 v1.0 新增（基本可用必备）
 
@@ -60,7 +60,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 - **零运行时依赖**：只用 Node 标准库；devDependency 也不引入（测试用内置 mock）
 - **体积**：包 <100KB；冷启动 <300ms
 - **兼容**：Node ≥22.18（type-stripping 免构建的最低版本；与 dsh 的 ^22.19/>=24 同代际）
-- **安全**：默认权限确认（F3）；apiKey 只读 env 或 `~/.ti/settings.json`（文档建议 chmod 600）；bash 无沙箱（文档明示风险，同 pi）
+- **安全**：默认权限确认（F3）；apiKey 只读 `~/.ti/settings.json`（文档建议 chmod 600）；bash 无沙箱（文档明示风险，同 pi）
 - **可维护**：`src/` 模块化拆分（按层分文件、单职责，详见 DESIGN.md §2；不设行数硬指标，职责清晰为准）；免构建直发（type-stripping），bin 入口固定 `src/main.ts`
 
 ## 6. 技术方案
@@ -68,7 +68,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 ### 6.1 架构（在现有五层上增量）
 
 ```
-配置层  ~/.ti/settings.json + env + CLI        （现状，不变）
+配置层  ~/.ti/settings.json + CLI              （现状，不采用环境变量的值）
 交互层  REPL + 单发    → 加：中断处理、历史持久化、权限提问、/compact /cost
 循环层  agentTurn      → 加：AbortSignal 贯穿、beforeToolCall 权限钩子、session 追加写
 传输层  callLLM 双协议 → 加：fetch(signal)、usage 累计

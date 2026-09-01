@@ -19,39 +19,38 @@ TypeScript 实现的 coding agent，架构照搬 [pi](https://github.com/badlogi
 node src/main.ts                          # 交互 REPL（或 npm start）
 node src/main.ts -p "创建一个 hello.txt"    # 单发模式
 node src/main.ts --provider anthropic     # 切换 provider（默认 deepseek）
-node src/main.ts -m deepseek-reasoner     # 切换模型
+node src/main.ts -m deepseek-v4-pro       # 同一家 deepseek 下换 Pro
 ```
 
 ## 配置（参考 pi 的 ~/.pi/）
 
-个人配置放在 **`~/.ti/settings.json`**（不存在也能跑，纯环境变量即可）：
+个人配置放在 **`~/.ti/settings.json`**。端点、模型、key、用哪一家都写在这里，不采用环境变量的值。
 
 ```jsonc
 {
-  "provider": "deepseek",            // 默认 provider
+  "provider": "deepseek",
   "providers": {
-    "deepseek":  { "model": "deepseek-chat", "apiKey": "sk-..." },
-    "anthropic": { "baseURL": "https://api.kimi.com/coding/", "model": "k3" }
+    "deepseek":  { "apiKey": "sk-..." },
+    "anthropic": { "baseURL": "https://api.kimi.com/coding/", "model": "k3", "auth": "bearer", "apiKey": "..." }
   }
 }
 ```
 
 内置预设：
 
-| 预设 | 协议 | 默认 baseURL | 默认模型 | key 来源（env 优先于配置文件） |
+| 预设 | 协议 | 默认 baseURL | 模型（第一项默认） | key |
 |---|---|---|---|---|
-| `deepseek` | openai | `https://api.deepseek.com` | `deepseek-chat` | `DEEPSEEK_API_KEY` → `OPENAI_API_KEY` → 配置 apiKey |
-| `anthropic` | anthropic | `https://api.anthropic.com` | `k3` | `ANTHROPIC_AUTH_TOKEN`（Bearer）/ `ANTHROPIC_API_KEY`（x-api-key）→ 配置 apiKey |
+| `deepseek` | openai | `https://api.deepseek.com` | `deepseek-v4-flash`、`deepseek-v4-pro` | `providers.deepseek.apiKey` |
+| `anthropic` | anthropic | `https://api.anthropic.com` | `k3` | `providers.anthropic.apiKey` |
 
 解析优先级（高 → 低）：
 
 ```
-CLI（--provider / -m） > 环境变量（TI_PROVIDER / TI_MODEL / TI_BASE_URL 等）
-  > ~/.ti/settings.json > 内置预设
+CLI（--provider / -m）> ~/.ti/settings.json > 内置预设
 ```
 
-`providers.<name>` 支持的字段：`baseURL`、`model`、`apiKey`、`auth`（`"bearer"` | `"x-api-key"`，anthropic 协议用）。
-也可以在 `providers` 里加自定义名字的 provider，然后 `--provider <name>` 使用。
+`providers.<name>` 支持：`baseURL`、`model`（覆盖默认）、`models`（`[{ id }]`）、`apiKey`、`auth`（`"bearer"` | `"x-api-key"`）、`protocol`。
+也可以在 `providers` 里加自定义名字，然后 `--provider <name>` 使用。
 
 ## 使用
 
@@ -59,7 +58,7 @@ CLI（--provider / -m） > 环境变量（TI_PROVIDER / TI_MODEL / TI_BASE_URL �
 
 - `/model` — 查看当前 provider / 模型 / 端点
 - `/model anthropic` — 切换 provider（连带其默认模型）；上下文是协议无关的，跨 provider 无缝
-- `/model deepseek-reasoner` — 当前 provider 下换模型
+- `/model deepseek-v4-pro` — 当前 provider 下换模型
 - `/clear` — 清空对话上下文
 - `/exit` — 退出
 
@@ -74,6 +73,7 @@ CLI（--provider / -m） > 环境变量（TI_PROVIDER / TI_MODEL / TI_BASE_URL �
 | 文件 | 说明 |
 |---|---|
 | `src/` | 全部实现，四层模块化（含详细中文注释）：`cli/`（接口层）→ `core/`（应用/领域层）→ `llm/`+`tools/`+`config/`（适配层）→ `types.ts`（纯类型），入口 `src/main.ts`。详见 `docs/DESIGN.md` §2 |
-| `docs/ARCHITECTURE.md` | 架构文档：分层图、agent loop 流程图、时序图、与 pi 的对应关系 |
-| `docs/` | `PRD.md`（v1.0 需求）· `DESIGN.md`（详细设计） |
+| `docs/READING.md` | 代码观看顺序与阅读指南（从 `src/` 现状读起） |
+| `docs/ARCHITECTURE.md` | 架构文档：分层图、agent loop 流程图、时序图、与 pi 的对应关系（v0.1 归档） |
+| `docs/` | `PRD.md`（v1.0 需求）· `DESIGN.md`（详细设计，含尚未实现的文件） |
 | `package.json` | `type: module` + `npm start` |

@@ -36,7 +36,9 @@ export async function repl(messages: Message[], ctx: AgentContext): Promise<void
       try {
         if (!arg) {
           const p = getProvider();
+          const models = PRESETS[p.name]?.models?.map((m) => m.id).join(", ");
           console.log(dim(`provider: ${p.name} | model: ${p.model} | ${p.baseURL}`));
+          if (models) console.log(dim(`models: ${models}`));
         } else if (PRESETS[arg] || settings.providers?.[arg]) {
           setProvider(resolveProvider(arg));
           const p = getProvider();

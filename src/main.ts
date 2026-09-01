@@ -48,18 +48,15 @@ function help(code: number): never {
   console.log(`ti — minimal coding agent (pi-style)
 usage: ti [--provider name] [-m model] [-p prompt | prompt words...]
   -p, --prompt     run a single prompt non-interactively (default: interactive REPL)
-  -m, --model      model name (overrides env / config / preset default)
+  -m, --model      model name (overrides settings.json / preset default)
       --provider   provider: deepseek (default) | anthropic | custom names from settings.json
-config: ~/.ti/settings.json — { "provider": "deepseek", "providers": { "<name>": { "baseURL", "model", "apiKey" } } }
-env:    TI_PROVIDER / TI_MODEL / TI_BASE_URL
-        DEEPSEEK_API_KEY (or OPENAI_API_KEY)      — for the openai protocol
-        ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY — for the anthropic protocol`);
+config: ~/.ti/settings.json — { "provider": "deepseek", "providers": { "<name>": { "baseURL", "model", "apiKey" } } }`);
   process.exit(code);
 }
 
 // -------- 装配（组合根）
 // 启动时解析一次 provider；REPL 里 /model 可随时切换（provider 是会话级可变状态，住 config/index.ts）
-setProvider(resolveProvider(cliProvider ?? process.env.TI_PROVIDER ?? settings.provider ?? "deepseek", cliModel));
+setProvider(resolveProvider(cliProvider ?? settings.provider ?? "deepseek", cliModel));
 const ctx: AgentContext = { systemPrompt: await buildSystemPrompt(), ui: createTerminalUI() };
 
 // -------- 分发：带 prompt 走单发模式，否则进 REPL 多轮对话

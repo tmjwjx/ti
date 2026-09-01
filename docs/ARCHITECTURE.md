@@ -13,9 +13,9 @@
 ┌────────────────────────────────────────────────────────────────────┐
 │                              agent.ts                              │
 │                                                                    │
-│  配置层    CLI 参数 > 环境变量 > ~/.ti/settings.json > 内置预设      │
+│  配置层    CLI > ~/.ti/settings.json > 预设（不采用 env 值）         │
 │              resolveProvider() → { protocol, baseURL, model, key } │
-│              预设：deepseek(默认, OpenAI 协议) / anthropic          │
+│              预设：deepseek(默认 flash，含 pro) / anthropic         │
 │                                                                    │
 │  交互层    REPL (readline 异步迭代)        单发模式 (-p prompt)     │
 │              └──────────────┬──────────────────┘                   │
@@ -133,7 +133,7 @@ sequenceDiagram
 | `truncate()` | `core/tools/truncate.ts` | 同样的头部截断：2000 行 / 50KB |
 | `buildSystemPrompt()` | `core/system-prompt.ts` | 同样 <1k tokens；同样加载 AGENTS.md/CLAUDE.md 作为 project_context |
 | `callLLM()` → `callAnthropic()` / `callOpenAI()` | `packages/ai`（多 provider 统一流式层） | 双协议（Anthropic Messages / OpenAI chat completions），收发边界做格式转换、内部统一 `Block[]`，共用 `sseJson()` 帧解析 |
-| `resolveProvider()` + `~/.ti/settings.json` | `~/.pi/agent/`（settings.json + auth.json + models.json） | CLI > env > 配置文件 > 内置预设 四级优先级；key 可放配置文件（env 优先） |
+| `resolveProvider()` + `~/.ti/settings.json` | `~/.pi/agent/`（settings.json + auth.json + models.json） | CLI > 配置文件 > 预设；不采用环境变量的值 |
 | `repl()` | `packages/tui` + modes/interactive | pi 是完整 TUI（差分渲染、编辑器组件）；这里是 readline + `/model` `/clear` 斜杠命令 |
 
 ## 关键保护机制

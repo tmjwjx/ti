@@ -72,7 +72,7 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 **存储格式**（`~/.ti/sessions/<时间戳>_<4位随机>.jsonl`，时间戳冒号转 `-` 保证文件名合法且可按名称排序）：
 
 ```jsonl
-{"type":"meta","version":1,"cwd":"/abs/path","provider":"deepseek","model":"deepseek-chat","createdAt":"2026-08-18T08:30:00.000Z"}
+{"type":"meta","version":1,"cwd":"/abs/path","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-08-18T08:30:00.000Z"}
 {"type":"message","role":"user","content":"帮我改个 bug"}
 {"type":"message","role":"assistant","content":[...]}
 {"type":"compact","createdAt":"..."}              ← F4 压缩时写入的分隔标记
@@ -197,9 +197,9 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 
 | # | 场景 | 环境 | 断言 |
 |---|---|---|---|
-| S1 | OpenAI 协议全链路 | `TI_BASE_URL` 指 mock + 假 key | 输出含 mock 工具结果；mock 侧角色序列 `system→user→assistant+tool_calls→tool` |
-| S2 | Anthropic 协议全链路 | `ANTHROPIC_BASE_URL` 指 mock | 同上（content_block 事件流） |
-| S3 | 配置优先级 | HOME 隔离 + settings.json vs env | 实际请求的 baseURL/key 符合优先级 |
+| S1 | OpenAI 协议全链路 | settings.json 的 baseURL 指 mock + 假 key | 输出含 mock 工具结果；mock 侧角色序列 `system→user→assistant+tool_calls→tool` |
+| S2 | Anthropic 协议全链路 | settings.json 的 baseURL 指 mock | 同上（content_block 事件流） |
+| S3 | 配置优先级 | HOME 隔离 + settings.json vs CLI | 实际请求的 baseURL/key 符合 CLI > 文件 > 预设 |
 | S4 | `/model`、`/provider` | 管道输入命令序列 | 输出包含切换后的 provider:model |
 | S5 | session 恢复 | 跑一轮 → `-c` 再起 | 第二轮请求 messages 含第一轮历史 |
 | S6 | 权限 ask 模式拒绝 | `--ask` + 管道（非 TTY） | 工具被拒、输出含权限提示 |
