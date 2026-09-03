@@ -1,9 +1,6 @@
-/**
- * 工具输出头部截断（对应 pi 的 truncate.ts）：先按行数截，再按字节截，超出时追加说明。
- * 防止 cat 大文件、长跑命令输出等内容撑爆模型上下文窗口。
- */
-export const MAX_LINES = 2000; // 最多保留 2000 行（与 pi 默认值一致）
-export const MAX_BYTES = 50 * 1024; // 且最多保留 50KB（同上）
+/** 先按行数截，再按字节截，避免工具输出撑爆上下文。 */
+export const MAX_LINES = 2000;
+export const MAX_BYTES = 50 * 1024;
 
 export function truncate(text: string): string {
   const lines = text.split("\n");

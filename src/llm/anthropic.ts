@@ -1,19 +1,11 @@
 /**
- * Anthropic Messages API（stream:true）。
- * 收发边界负责「自定义内部格式 ↔ Anthropic 线格式」的双向翻译：
- * - 发出：ToolCall → tool_use（arguments→input）；连续 toolResult 消息归并为
- *   一条 user 消息里的 tool_result 块（Anthropic 要求工具结果挂在 user 角色下）
- * - 收回：content_block 事件流 → TextContent/ToolCall（tool_use 参数以
- *   input_json_delta 分片下发，按块下标累积后一次性 JSON.parse）；
- *   stop_reason 归一化（max_tokens→length 等）
- * - onText 回调把文本增量实时打到终端（流式体验的核心）
- *
- * 无状态：provider、系统提示词与工具 schema 全部由调用方传入。
+ * Anthropic Messages API（stream）。
+ * 发出：连续 toolResult 归并成一条 user（协议要求结果挂在 user 下）。
+ * 收回：按 content_block 下标累积，stop_reason 收成 StopReason。
  */
 import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
 
-/** 内部消息 → Anthropic 线格式。连续 toolResult 归并进一条 user 消息（role 交替约束） */
 function toWire(messages: Message[]): any[] {
   const out: any[] = [];
   let results: any[] = [];
@@ -28,7 +20,7 @@ function toWire(messages: Message[]): any[] {
       results.push({ type: "tool_result", tool_use_id: m.toolCallId, content: m.content, is_error: m.isError });
     } else if (m.role === "user") {
       flush();
-      out.push({ role: "user", content: m.content }); // string 与 TextContent[] 两种 Anthropic 都收
+      out.push({ role: "user", content: m.content });
     } else {
       flush();
       out.push({
@@ -41,7 +33,6 @@ function toWire(messages: Message[]): any[] {
   return out;
 }
 
-/** Anthropic stop_reason 方言 → 归一化 StopReason */
 function mapStop(reason: string | undefined, prev: StopReason): StopReason {
   switch (reason) {
     case "end_turn":
@@ -51,7 +42,7 @@ function mapStop(reason: string | undefined, prev: StopReason): StopReason {
     case "tool_use":
       return "toolUse";
     default:
-      return prev; // 未知值保持现状（安全兜底）
+      return prev;
   }
 }
 
@@ -73,44 +64,48 @@ export async function callAnthropic(
   });
   if (!res.ok || !res.body) throw new Error(`API error ${res.status}: ${await res.text()}`);
 
-  // content 按 content_block 的 index 存放；端点若返回 thinking 等未处理块会留下空洞，
-  // 最后统一 filter(Boolean) 丢弃（本 agent 不开启 thinking，丢弃是安全兜底）
+  // 按下标放块；未处理的类型会留下空洞，最后 filter(Boolean) 丢掉
   const content: (TextContent | ToolCall)[] = [];
-  const jsonBuf: string[] = []; // 按块下标累积 tool_use 参数的 partial_json 分片
+  const jsonBuf: string[] = [];
   let stopReason: StopReason = "stop";
   const usage = { input: 0, output: 0 };
 
   for await (const ev of sseJson(res)) {
     switch (ev.type) {
-      case "message_start": // 消息开始：携带输入 token 数
+      case "message_start":
         usage.input = ev.message?.usage?.input_tokens ?? 0;
         break;
-      case "content_block_start": // 内容块开始：text 建空文本块；tool_use 建调用块并开始累积参数
+      case "content_block_start":
         if (ev.content_block.type === "text") content[ev.index] = { type: "text", text: "" };
         else if (ev.content_block.type === "tool_use") {
-          content[ev.index] = { type: "toolCall", id: ev.content_block.id, name: ev.content_block.name, arguments: {} };
+          // 有的端点在 start 就带完整 input，后面没有 json delta
+          content[ev.index] = { type: "toolCall", id: ev.content_block.id, name: ev.content_block.name, arguments: ev.content_block.input ?? {} };
           jsonBuf[ev.index] = "";
         }
         break;
-      case "content_block_delta": // 增量：文本 → 追加并回调打印；工具参数 → 累积 JSON 分片
+      case "content_block_delta":
         if (ev.delta.type === "text_delta") {
-          (content[ev.index] as TextContent).text += ev.delta.text;
-          onText(ev.delta.text);
-        } else if (ev.delta.type === "input_json_delta") jsonBuf[ev.index] += ev.delta.partial_json;
+          const b = content[ev.index];
+          if (b?.type === "text") {
+            b.text += ev.delta.text;
+            onText(ev.delta.text);
+          }
+        } else if (ev.delta.type === "input_json_delta" && jsonBuf[ev.index] !== undefined) {
+          jsonBuf[ev.index] += ev.delta.partial_json;
+        }
         break;
       case "content_block_stop": {
-        // 块结束：把累积的工具参数 JSON 一次性解析（解析失败兜底为空对象）
         const b = content[ev.index];
-        if (b?.type === "toolCall") {
+        if (b?.type === "toolCall" && jsonBuf[ev.index]) {
           try {
-            b.arguments = JSON.parse(jsonBuf[ev.index] || "{}");
+            b.arguments = JSON.parse(jsonBuf[ev.index]);
           } catch {
             b.arguments = {};
           }
         }
         break;
       }
-      case "message_delta": // 收尾：stop_reason 与输出 token 数
+      case "message_delta":
         stopReason = mapStop(ev.delta?.stop_reason, stopReason);
         usage.output = ev.usage?.output_tokens ?? usage.output;
         break;
