@@ -1,5 +1,5 @@
 /**
- * 发布用构建：把 src/ 打成一份 dist/ti.js。
+ * 发布用构建：把 src/ 打成一份 bin/ti.js。
  *
  * 这不是加密。esbuild minify 只做：并文件、缩短名字、去掉空白和注释。
  * sourcemap: false —— 不生成 .map，避免对照表把原文带出去（Claude Code 2.1.88 那种）。
@@ -15,8 +15,8 @@ await esbuild.build({
   target: "node22",
   minify: true,
   sourcemap: false,
-  outfile: "dist/ti.js",
+  outfile: "bin/ti.js",
   banner: { js: "#!/usr/bin/env node\n" },
 });
 
-console.error("wrote dist/ti.js (minified, no source map)");
+console.error("wrote bin/ti.js (minified, no source map)");

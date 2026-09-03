@@ -1,5 +1,5 @@
 node_modules/
-dist/
+bin/
 .DS_Store
 scratch/
 *.tgz

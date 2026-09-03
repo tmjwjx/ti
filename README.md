@@ -25,8 +25,8 @@ node src/main.ts -m deepseek-v4-pro       # 换模型
 
 ```bash
 npm install          # 只需一次，装 esbuild
-npm run build        # 写出 dist/ti.js
-npm pack --dry-run   # 应只有 dist/，没有 src/
+npm run build        # 写出 bin/ti.js
+npm pack --dry-run   # 应只有 bin/，没有 src/
 ```
 
 ## 配置（参考 pi 的 ~/.pi/）

@@ -4,10 +4,10 @@
   "description": "Minimal coding agent",
   "type": "module",
   "bin": {
-    "ti": "./dist/ti.js"
+    "ti": "bin/ti.js"
   },
   "files": [
-    "dist"
+    "bin"
   ],
   "engines": {
     "node": ">=22.18.0"
