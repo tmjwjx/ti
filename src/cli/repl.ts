@@ -13,6 +13,8 @@ function providerNames(): string[] {
   return [...new Set([...Object.keys(PRESETS), ...Object.keys(settings.providers ?? {})])];
 }
 
+// 交互式多轮对话
+// 本文件就是这个循环。斜杠命令自己处理，其它非空行交给 agentTurn。
 export async function repl(messages: Message[], ctx: AgentContext): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   rl.setPrompt(cyan("\n> "));

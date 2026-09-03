@@ -1,9 +1,24 @@
 {
-  "name": "ti",
-  "version": "0.1.0",
-  "description": "Minimal coding agent in one file, modeled after pi (badlogic/pi-mono)",
+  "name": "@tmjwjx/ti",
+  "version": "0.0.1",
+  "description": "Minimal coding agent",
   "type": "module",
+  "bin": {
+    "ti": "./dist/ti.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "license": "MIT",
   "scripts": {
-    "start": "node src/main.ts"
+    "start": "node src/main.ts",
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   }
 }

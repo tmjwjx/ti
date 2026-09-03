@@ -2,7 +2,8 @@
  * 预设 + ~/.ti/settings.json + 当前 provider。
  * 优先级：CLI（--provider / -m）> settings.json > 预设。不读环境变量的值。
  */
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { homedir } from "node:os";
 import type { Protocol, ProviderConf } from "../types.ts";
 
@@ -17,11 +18,11 @@ export const PRESETS: Record<string, ProviderPreset> = {
     baseURL: "https://api.deepseek.com",
     models: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }],
   },
-  anthropic: {
-    protocol: "anthropic",
-    baseURL: "https://api.anthropic.com",
-    models: [{ id: "k3" }],
-  },
+};
+
+const DEFAULT_SETTINGS = {
+  provider: "deepseek",
+  providers: { deepseek: { apiKey: "" } },
 };
 
 export function loadSettings(): any {
@@ -32,7 +33,16 @@ export function loadSettings(): any {
   }
 }
 
-export const settings = loadSettings();
+export let settings = loadSettings();
+
+/** 没有文件就建一份模板。已有文件不碰。--help 不要走这里。 */
+export function ensureSettings(): void {
+  if (existsSync(SETTINGS_PATH)) return;
+  mkdirSync(dirname(SETTINGS_PATH), { recursive: true });
+  writeFileSync(SETTINGS_PATH, JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n", "utf8");
+  settings = loadSettings();
+  console.error(`已创建 ${SETTINGS_PATH}，请填写 providers.deepseek.apiKey`);
+}
 
 export function fail(msg: string): never {
   throw new Error(msg);

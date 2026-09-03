@@ -13,13 +13,20 @@ TypeScript 实现的 coding agent，架构照搬 [pi](https://github.com/badlogi
 
 ## 运行
 
-需要 Node ≥ 22.18（原生 type-stripping，无需构建；推荐 Node 26）。零依赖，不用 `npm install`。
+需要 Node ≥ 22.18。日常开发直接跑源码，不用构建：
 
 ```bash
 node src/main.ts                          # 交互 REPL（或 npm start）
 node src/main.ts -p "创建一个 hello.txt"    # 单发模式
-node src/main.ts --provider anthropic     # 切换 provider（默认 deepseek）
-node src/main.ts -m deepseek-v4-pro       # 同一家 deepseek 下换 Pro
+node src/main.ts -m deepseek-v4-pro       # 换模型
+```
+
+发布用的是压缩后的一份 JS（不是加密，只是 minify，且不带 source map）：
+
+```bash
+npm install          # 只需一次，装 esbuild
+npm run build        # 写出 dist/ti.js
+npm pack --dry-run   # 应只有 dist/，没有 src/
 ```
 
 ## 配置（参考 pi 的 ~/.pi/）

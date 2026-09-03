@@ -46,7 +46,7 @@ agent loop（流式请求→工具执行→结果回灌→循环）；4 工具�
 | F4 | **/compact 上下文压缩** | 把当前消息历史发给模型生成结构化摘要（已完成事项/改动文件/关键决策/待办），替换为单条摘要消息继续会话；原始历史保留在 session 文件 | 压缩后 token 数显著下降；模型能基于摘要正确接续工作 |
 | F5 | **输入体验** | readline 历史持久化到 `~/.ti/history`（上限 1000 条）；支持 `\` 续行多行输入 | 重启后方向键↑能翻出上次会话的命令 |
 | F6 | **token 会话累计** | 每轮已有统计基础上加会话累计；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到 v1.1） | `/cost` 显示累计 in/out token 与会话轮数 |
-| F7 | **npm 打包就绪（不发布）** | 方案 A：shebang + `bin:{"ti":"./agent.ts"}` + `engines:{"node":">=22.18.0"}` + `files` 白名单 + MIT LICENSE + 英文优先 README（保留中文小节）；`npm pack` 检查产物；全局安装自测 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti -p "..."` 在 Node 22.18+ 可用 |
+| F7 | **npm 打包就绪（不发布）** | 方案 A：hashbang + `bin:{"ti":"./agent.ts"}` + `engines:{"node":">=22.18.0"}` + `files` 白名单 + MIT LICENSE + 英文优先 README（保留中文小节）；`npm pack` 检查产物；全局安装自测 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti -p "..."` 在 Node 22.18+ 可用 |
 | F8 | **冒烟测试** | `scripts/smoke.mjs`：内置 mock server（OpenAI 协议）+ 罐头 SSE，跑通「工具调用全链路 / 配置优先级 / /model」断言；`npm test` 可跑 | 无真实 API key 时 `npm test` 全绿 |
 | F9 | **skills** | 启动时扫描 `~/.ti/skills/*/SKILL.md` 与项目 `.ti/skills/*/SKILL.md`，解析 frontmatter 的 name/description（手写两行解析，不引 yaml 库），把技能清单（名称+一句话）追加进系统提示词；模型按需用现有 read 工具读取完整 SKILL.md——渐进披露，pi 同款机制 | 放一个 SKILL.md 到 skills 目录后，agent 能在对话中识别并正确按技能指示行动 |
 | F10 | **/provider 命令** | REPL 内 `/provider` 列出全部可用 provider（内置预设 + settings.json 自定义，标注当前）；`/provider <name>` 整套切换（baseURL/key/默认模型）；分工明确：/provider 换配置、/model 只换模型名 | 不重启即可在 deepseek / anthropic / 自定义配置间切换 |
@@ -100,7 +100,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 
 ```
 src/                # 分层源码（完整树与依赖规则见 DESIGN.md §2）
-  main.ts           # 唯一入口（shebang、组合根装配、分发）
+  main.ts           # 唯一入口（hashbang、组合根装配、分发）
   types.ts          # 领域模型（纯类型）
   cli/              # 接口层：repl.ts · render.ts · input.ts
   core/             # 应用/领域层：agent.ts · session.ts · permissions.ts · prompt.ts · skills.ts

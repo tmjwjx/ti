@@ -23,7 +23,7 @@ ti/
 ├── scripts/
 │   └── smoke.mjs             # F8 冒烟测试（内置双协议 mock server + 断言）
 └── src/
-    ├── main.ts               # 唯一入口（薄）：shebang、CLI 参数解析、装配、-c/--resume、单发/REPL 分发
+    ├── main.ts               # 唯一入口（薄）：hashbang、CLI 参数解析、装配、-c/--resume、单发/REPL 分发
     ├── types.ts              # 领域模型（纯类型）：Message 联合 / 内容块 / ProviderConf / Skill / SessionMeta…
     ├── cli/                  # 接口层：终端交互适配（不被任何模块依赖）
     │   ├── repl.ts           #   REPL 主循环、斜杠命令（/model /provider /compact /cost /clear）
