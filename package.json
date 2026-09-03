@@ -1,7 +1,7 @@
 {
   "name": "@tmjwjx/ti",
-  "version": "0.0.1",
-  "description": "Minimal coding agent",
+  "version": "0.0.2",
+  "description": "A coding agent for the terminal",
   "type": "module",
   "bin": {
     "ti": "bin/ti.js"
