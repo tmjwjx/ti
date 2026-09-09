@@ -55,6 +55,28 @@ agent loop（流式请求→工具执行→结果回灌→循环）；4 工具�
 
 extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost 金额统计（内置可配置价格表）；`/init` 生成 AGENTS.md；bash 后台任务；粘贴多行优化；PTC 模式调研（dsh）。
 
+### 4.4 TUI（2026-09 已落地 / 待做）
+
+**已落地**
+
+- footer：`provider:model · cwd · turn in/out · session in/out`；模型在跑时右侧 `esc interrupt`
+- 每轮 LLM 调用后 transcript 打 token；`/cost` 看会话累计
+- 输入 `/` 出命令列表，↑↓ 选，Tab 补全，Enter 提交
+- editor：Ctrl+A/E 行首尾，Ctrl+U/K 删到行首/行尾，Ctrl+H / Ctrl+D 删前一字（Ctrl+D 空则退出）
+- 模型在跑时 editor 仍可输入；Enter 排队等本轮结束再发；Esc / 空输入时 Ctrl+C 打断（AbortSignal 贯穿 fetch 与 bash）
+- 退出：Ctrl+C 有字先清空，空且空闲才退出；Ctrl+D 空退出；`/exit` 退出
+- 重绘：行级 diff + CSI 2026，不再每帧 `\x1b[H\x1b[J`
+- transcript：用户 `❯`、工具 `→` 缩进、结果再缩进、token 单独一行
+
+**待做（这次没做，避免把 TUI 做成第二套框架）**
+
+- 主屏真·追加滚动（现在仍是视口钉底栏，只是少闪）；可选 fullscreen / 备用屏
+- 当前 turn 中途插入 steering（现在排队的消息等本轮结束才发给模型）
+- 括号粘贴（bracketed paste）、`@` 文件、Tab 路径补全
+- 鼠标滚轮 / 选中复制的应用层处理
+- `/cost` 金额（价格表易过时）
+- 历史持久化到 `~/.ti/history`（仍是 PRD F5）
+
 ## 5. 非功能需求
 
 - **零运行时依赖**：只用 Node 标准库；devDependency 也不引入（测试用内置 mock）

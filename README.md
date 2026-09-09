@@ -5,16 +5,16 @@
 ```bash
 npm i -g @tmjwjx/ti
 ti
-ti -p "你的任务"
 ```
 
-需要 Node ≥ 22.18。第一次运行若没有配置，会创建 `~/.ti/settings.json`，填入 `apiKey` 后即可使用。
+Node ≥ 22.18. First run opens a setup picker for provider, model, and API key. Config lives at `~/.ti/settings.json`. Re-run anytime with `ti setup`.
 
 ```
-/clear      清空对话
-/model      查看或切换模型
-/provider   查看或切换厂家
-/exit       退出
+/clear      clear conversation
+/model      switch configured model
+/provider   switch configured provider
+/setup      add or edit provider
+/exit       quit
 ```
 
-在要操作的项目目录里启动。
+Start it in the project directory you want to work on.

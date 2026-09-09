@@ -11,6 +11,7 @@
 4. **失败就地回灌**：工具/权限/中断的失败都转成 `isError` 的 toolResult 消息回灌模型，loop 永不崩溃
 5. **状态三处**：对话状态 = `messages[]`（内存）→ `~/.ti/sessions/*.jsonl`（持久化）；配置 = `~/.ti/settings.json`；输入历史 = `~/.ti/history`
 6. **免构建**：Node type-stripping 直接运行 `.ts`；相对 import 必须带 `.ts` 扩展名；只用可擦除语法（无 enum/namespace/参数属性）
+7. **注释**：每个函数上方一两句中文说明功能/关键逻辑；复杂业务在步骤旁讲清为什么和分支。一眼能看懂的代码不堆注释。标识符英文，注释中文。
 
 ## 2. 文件架构
 
@@ -104,7 +105,7 @@ function latestSessionFor(cwd: string): string | null  // 按文件名倒序找�
 
 **协议合法性**（关键设计）：abort 发生时，若已构造的 assistant 消息里含 tool_use 块，则**每个未拿到结果的 tool_use 都补一条** `is_error:true, content:"aborted by user"` 的 tool_result 再入历史——Anthropic 与 OpenAI 两种协议都要求调用必须有结果，否则下一轮请求 400。
 
-**触发**：REPL 里 `rl.on("SIGINT")`——`currentAbort` 非空 → `abort()`（当前 turn 优雅收尾，打印 `[interrupted]`）；为空（空闲）→ 退出进程。**只做 Ctrl+C，不做 Esc**（Esc 需 keypress 级处理，收益低；相对 PRD 的简化点）。单发模式同样挂 `process.on("SIGINT")` → abort。
+**触发（TUI）**：Esc 或空输入时 Ctrl+C → `abort()`（当前 turn 收尾，打印 `[interrupted]`）；editor 有字时 Ctrl+C 只清空，不退出。空闲且输入为空时 Ctrl+C / Ctrl+D / `/exit` 退出。非 TTY readline 仍是空闲 Ctrl+C 退出。AbortSignal 贯穿 `fetch` 与 bash。
 
 ### F3 · 权限（默认 auto）
 
@@ -216,7 +217,7 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 | 权限提问与 for-await 主循环的 stdin 竞争 | readOneLine 直接读 stdin、不建第二 rl 实例；非 TTY 一律 deny |
 | session 文件无锁/无压缩 | 单用户单进程工具，线性追加足够；pi 同样从简 |
 | compact 用当前 provider 模型 | 不引入额外「小模型」配置，行为可预期 |
-| F2 不做 Esc | Ctrl+C 已覆盖场景，Esc 需 keypress 处理复杂度不值 |
+| F2 TUI 用 Esc 打断 | 空闲退出仍是空输入 Ctrl+C / Ctrl+D / `/exit` |
 
 ## 7. 实施顺序（对应 PRD 里程碑）
 

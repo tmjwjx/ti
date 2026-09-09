@@ -1,105 +1,180 @@
-# ti 代码阅读指南
+# 相对 0.0.2 的变更阅读指南
 
-一次读一个文件。只看已经存在的 [`src/`](../src/)，别先读 [DESIGN.md](./DESIGN.md)（里面有尚未实现的模块）。
+对照点：git `8d9838c`（0.0.2）→ 当前工作区（未发版、未 commit）。
+0.0.2 里已经懂的（`types.ts`、工具三件套、`sse.ts`、两家协议主干、`prompt.ts`、agent 主循环骨架）**跳过**。这里只标差异。
 
-依赖只能由外向内：[`cli/`](../src/cli/) → [`core/`](../src/core/) → [`llm/`](../src/llm/) [`tools/`](../src/tools/) [`config/`](../src/config/) → [`types.ts`](../src/types.ts)。每读一个文件，看它 `import` 了谁。
+本地：`npm start`。别用全局 `ti`。
 
-## 第一遍：从里往外
+---
 
-### 1. [src/types.ts](../src/types.ts)
+## 没动，不用重读
 
-三种消息：`user`（你打的字）、`assistant`（文本块 + 工具调用块，带 `usage` / `stopReason`）、`toolResult`（独立一条，用 `toolCallId` 对上调用）。
+`src/types.ts` · `src/tools/{read,write,edit,truncate}.ts` · `src/llm/sse.ts` · `src/core/prompt.ts`
 
-内部格式是自定义的，不绑任何一家 API。为什么，见 [附录 A](#附录-a内部消息格式)。
+`openai.ts` / `anthropic.ts` 的 **toWire / 流式拼块** 没改语义，只在外围加了 `signal` 和 abort 半截返回。协议翻译不用重学。
 
-### 2. [src/tools/](../src/tools/)
+---
 
-顺序：[truncate.ts](../src/tools/truncate.ts) → [read.ts](../src/tools/read.ts) / [write.ts](../src/tools/write.ts) → [edit.ts](../src/tools/edit.ts) → [bash.ts](../src/tools/bash.ts) → [index.ts](../src/tools/index.ts)。
+## 建议顺序（只读变更）
 
-- [truncate.ts](../src/tools/truncate.ts)：行数 + 字节双段截断
-- [edit.ts](../src/tools/edit.ts)：所有 `oldText` 先校验存在且唯一，全过才改
-- [bash.ts](../src/tools/bash.ts)：失败也返回字符串，不 reject（要回灌给模型）
-- [index.ts](../src/tools/index.ts)：`TOOLS` 是写给模型的说明书；`runTool` 按名分发
+新文件整篇读。旧文件按「看哪」读，不要通篇。
 
-`resolvePath` 在三个文件里重复定义，值不值抽？
-
-### 3. [src/config/index.ts](../src/config/index.ts)
-
-`resolveProvider()`：CLI > `~/.ti/settings.json` > 预设（不采用环境变量的值）。推一遍 `--provider anthropic -m k3` 时每个字段从哪来。
-
-`getProvider` / `setProvider` 是现在唯一的全局可变状态，[`/model`](../src/cli/repl.ts) 切的就是它。`fail()` 为什么直接 `process.exit(1)`？
-
-### 4. [src/llm/](../src/llm/)
-
-顺序：[sse.ts](../src/llm/sse.ts) → [index.ts](../src/llm/index.ts) → [anthropic.ts](../src/llm/anthropic.ts) 与 [openai.ts](../src/llm/openai.ts) 对照。
-
-- [sse.ts](../src/llm/sse.ts)：TCP 包边界 ≠ 事件边界，不完整的帧留到下次拼
-- [index.ts](../src/llm/index.ts)：只一个 `callLLM`，core 只认识它
-- 两条协议都是「增量 → `AssistantMessage`」，差异关在这层
-
-`stopReason` 归一成 `stop` / `length` / `toolUse`。
-
-### 5. [src/core/](../src/core/)
-
-[prompt.ts](../src/core/prompt.ts) 过一下。[agent.ts](../src/core/agent.ts) 逐行读：`callLLM` → 有 `toolCall` 就 `runTool` → `push` `toolResult` → 再调。出口：没工具 / `MAX_TURNS` / 请求抛错。
-
-- `stopReason === "length"` 时不执行工具
-- 工具失败照样 `push` `isError: true`，loop 不崩
-- `ui.xxx` 只发语义事件，着色在 [render.ts](../src/cli/render.ts)
-
-`messages.push` 几次、分别什么角色？画出来（D2 预习）。
-
-### 6. [src/cli/](../src/cli/)
-
-- [render.ts](../src/cli/render.ts)：`createTerminalUI()` 注入 core；非 TTY 无色
-- [repl.ts](../src/cli/repl.ts)：`/model` 调 `setProvider`；`for-await` readline（见头部注释的管道 bug）
-
-### 7. [src/main.ts](../src/main.ts)
-
-解析参数 → `setProvider` + 拼 `ctx` → `-p` 单发，否则 REPL。唯一装配点。
-
-[ARCHITECTURE.md](./ARCHITECTURE.md) 是 v0.1 归档；[PRD.md](./PRD.md) / [DESIGN.md](./DESIGN.md) 第一遍读完再看。
-
-## 第二遍：跟一次请求
-
-```bash
-node src/main.ts --provider anthropic -p "用 read 工具读 package.json，只复述 name 和 version"
+```
+1. config/index.ts     目录替换预设
+2. cli/keys.ts         新 · 按键解码
+3. cli/form.ts         新 · 全屏 select/input
+4. cli/setup.ts        新 · 首次指引
+5. main.ts             装配变了
+6. cli/render.ts       UI 可注入 TUI
+7. llm/ + tools/bash   只看 signal
+8. core/agent.ts       只看 abort / token
+9. cli/repl.ts         命令 + TUI 循环
+10. cli/tui.ts         新 · 最大块
 ```
 
-[main.ts](../src/main.ts) → [agent.ts](../src/core/agent.ts) → [llm/index.ts](../src/llm/index.ts) → [anthropic.ts](../src/llm/anthropic.ts) + [sse.ts](../src/llm/sse.ts) → [read.ts](../src/tools/read.ts) → 再回 [agent.ts](../src/core/agent.ts)。纸上画出 `messages` 每一步的形状。
+---
 
-## 过关题
+## 新文件（四份）
 
-1. 一次用户输入，`messages` 会 push 几次、什么角色？
-2. `toolResult` 为什么平铺成独立消息？两条协议边界分别怎么处理？
-3. 新增 Gemini 动哪些文件？哪些不用动？
-4. `/model anthropic` 后，下一轮怎么用到新 provider？
-5. 为什么注入 `AgentUI`，而不是 core 里 `console.log`？
-6. bash 退出码 1 和 fetch 失败，为什么走不同路径？
-7. 工具参数 JSON 损坏有几道防线？
-8. 全局可变状态设计上三处，现在实现了几处？
+### [src/cli/keys.ts](../src/cli/keys.ts)
 
-## 附录 A：内部消息格式
+按键解码。`parseKey("\\x1b[A")` → `"up"`，`parseKey("\\x03")` → `"ctrl+c"`。
+CSI / SS3 / C0 / kitty CSI u / modifyOtherKeys 都在这里。`form` / `tui` 只认名字。
+Ctrl+A 是不是行首，不在这层，在 tui 的 `EDITOR`。
 
-2026-08-18 前内部借用 Anthropic 线格式。落盘（D2）前换成自定义格式（pi 同款），避免以后迁移 session。见 [types.ts](../src/types.ts)。
+### [src/cli/form.ts](../src/cli/form.ts)
 
-```jsonc
-{ role: "assistant", content: [
-  { type: "text", text: "我看一下" },
-  { type: "toolCall", id: "t1", name: "read", arguments: { path: "a.ts" } } ],
-  stopReason: "toolUse", usage: { input: 123, output: 45 } }
-{ role: "toolResult", toolCallId: "t1", toolName: "read", content: "...", isError: false }
+全屏控件：`select` / `input`，`\x1b[H\x1b[J` 画在屏顶。`FormAbort` = Esc / Ctrl+C。
+
+**TUI 下 setup 不再走这里。** 只给非 TTY / 无 TUI 兜底。`/model` `/provider` 在 TUI 里也不走这里。
+
+### [src/cli/setup.ts](../src/cli/setup.ts)
+
+状态机。有 TUI 用 `tui.pick` / `tui.ask`（底栏），没有才用 form。
+
+- 已有 ready 厂家：先 intent（给当前家加模型 / 加另一家 / 换 key）
+- 已有 key 且不是换 key：选完模型直接 `save`，不再贴 key
+- 三家只 `writeProvider({ apiKey, model })`，不写 protocol/baseURL（留给 `CATALOG`）
+- Custom 写全
+- 返回 `"saved" | "cancel"`。intent / 第一页 Esc = cancel
+
+### [src/cli/tui.ts](../src/cli/tui.ts)
+
+0.0.2 没有这个文件。TTY 交互全在这。按块读，不要从上到下硬啃：
+
+| 块 | 看什么 |
+|---|---|
+| 文件头注释 + `Tui` 类型 + `return` | 对外 API |
+| `inbox` / `waiters` / `readLine` / `submit` | editor 常开；Enter 进队列，不堵键盘 |
+| `decodeKey` + `onKey` | `parseKey` + `EDITOR` 绑定；退出、编辑、Esc 分层 |
+| `matches` + `setLookup` + `submenu` | `/` 命令列表；`/model` `/provider` 二级；`current` → `●` + 加粗 |
+| `paint` | 一帧 = transcript 视口 + palette + 框 + footer；和 `prevFrame` 逐行比 + CSI 2026 |
+| `pick` / `ask` | setup 挂底栏；`wizard` 接管按键，不 pause |
+| `echoUser` / footer | 忙时 `queued ❯`；`inbox.length` → `queued N` |
+| `pause` / `resume` | 留给非 TUI form；setup 不再用 |
+
+退出（只在 `onKey` 里）：
+
+- Ctrl+C：有字清空 → 向导则取消 → 空且 busy 打断 → 空且空闲 `close`
+- Ctrl+D：有字删后一字 → 空 `close`（向导时空不退）
+- Esc：向导取消 → 二级列表往回退 → busy 打断（不丢队列）→ 清空
+- `/exit` 不在这里，在 `repl.dispatch`
+
+---
+
+## 旧文件：只看改了的
+
+### [src/config/index.ts](../src/config/index.ts)
+
+`PRESETS` + `ensureSettings`（开机写空模板）**没了**。
+
+| 新 | 干什么 |
+|---|---|
+| `CATALOG` | deepseek / kimi / glm。协议和地址写死在代码里 |
+| `writeProvider` / `saveSettings` | setup、`/model` 落盘 |
+| `isProviderReady` | 能 `resolveProvider` 才算能用 |
+| `listProviderNames` | **只列 ready 的**，没 key 的 glm 不出现 |
+| `listModels` | 只列 settings 里已写入的模型（当前 model ∪ models[]） |
+| `fail()` | 只 throw，不再 `process.exit` |
+| `auth` | 目录可写；缺省仍是 anthropic→x-api-key，否则 bearer。Kimi 目录写的是 bearer |
+
+字段：CLI > 文件里**写了的** > 目录托底。三家指引故意不写 protocol/baseURL。
+
+### [src/main.ts](../src/main.ts)
+
+- 删了 `-p` 单发
+- 加了 `ti setup`、`maybeSetup`（当前厂家不能用就先指引）
+- TTY → **先 `openTui`，再 `maybeSetup(tui)`**，再 `setProvider` + `repl`（冷启动向导也在底栏）
+- 非 TTY 仍走旧 readline `repl`
+
+### [src/cli/render.ts](../src/cli/render.ts)
+
+`createTerminalUI(out?)`：可把 `write`/`writeln` 接到 TUI。层次改成工具 `→`、结果再缩进。加了 `bold`。
+
+### [src/llm/index.ts](../src/llm/index.ts) · [openai.ts](../src/llm/openai.ts) · [anthropic.ts](../src/llm/anthropic.ts)
+
+只多两件事：`fetch({ signal })`；abort 时有半截内容就 `return` 半截 assistant，完全没数据再抛 `AbortError`。`isAbortError` 在 index。
+
+### [src/tools/bash.ts](../src/tools/bash.ts) · [index.ts](../src/tools/index.ts)
+
+`runTool(..., signal?)` → bash 监听 abort → `SIGTERM`（2s 后 `SIGKILL`）。
+
+### [src/core/agent.ts](../src/core/agent.ts)
+
+循环骨架没变。新逻辑：
+
+- `ctx.signal`：每轮开头、工具前后检查
+- `callLLM(..., signal)`；`AbortError` → `[interrupted]`，**不 throw 出循环**
+- 已 push 的 assistant 若带 toolCall，必须 `sealTools` 补 `isError` toolResult（否则下一轮 400）
+- token 行：每次 LLM 返回都打（usage 全 0 则跳过）；不再只在「刚跑完工具」时打
+
+### [src/cli/repl.ts](../src/cli/repl.ts)
+
+从「readline + `/model` 改字符串」变成命令中枢。
+
+新/改：
+
+- `COMMANDS` + `setLookup`：TUI 里 `/model` `/provider` 展开二级列表，提交的是 `/model <id>`
+- `/cost` `/help`；未知 `/xxx` 不再当用户消息发给模型
+- `lastTurn` + `footerText`
+- TUI 循环：`readLine` 与 `agentTurn` 重叠（editor 不关）；聊天时 `setBusy` + `AbortController`；`onInterrupt` → `abort()`
+- 无参 `/model` `/provider`：有 TUI 时**不再** `pause`+`select`（避免画到屏顶）
+- `/setup` 直接 `runSetup(tui)`，底栏向导，不 pause
+- 非 TTY 后半截还是 readline，行为接近 0.0.2
+
+---
+
+## 一条路径串起来（只串新接头）
+
+```
+main → openTui → maybeSetup(tui) → setup pick/ask（底栏）
+     → setProvider → repl.setLookup / setFooter
+用户 /model → tui 二级列表（不进 form）
+用户 /setup → 同一套底栏向导；已有 key 跳过 key 页
+用户 Enter 一句话
+  tui.submit → echo ❯（忙则 queued ❯）→ inbox → dispatch push user
+  setBusy + signal → agentTurn(callLLM signal)
+  流式 render → tui.write → paint 差分
+  Esc → interrupt → fetch/bash 停 → sealTools?（队列还在）
+  footer 更新 turn/session / queued N
 ```
 
-块模型学 Anthropic（混排保序、参数是对象），`toolResult` 平铺学 OpenAI。
+模型在跑时再 Enter：进 `inbox`，**等本轮结束**才 `dispatch`，不会插入当前 turn。
 
-| 若用线格式当内部格式 | 问题 |
-| --- | --- |
-| OpenAI | arguments 是字符串；文本与工具调用顺序丢失 |
-| Anthropic | 没地方挂 usage；换协议要迁 session |
+---
 
-边界翻译（core 无感）：
+## 过关题（只问这次的差异）
 
-- [anthropic.ts](../src/llm/anthropic.ts)：toolCall→tool_use；连续 toolResult 归并进一条 user
-- [openai.ts](../src/llm/openai.ts)：toolCall→tool_calls；toolResult 1:1 → `role:"tool"`
-- 入站都归一成 `AssistantMessage`；`stopReason` → `stop` / `length` / `toolUse`
+1. 为什么三家 setup 不写 protocol/baseURL？文件里若写了会怎样？
+2. `listProviderNames` 为什么不列出目录里的 glm（没配 key 时）？
+3. TUI 下打 `/model` 为什么看不到屏顶 Model 框？`setLookup` 返回的 `name` 谁消费？
+4. abort 发生在「assistant 已带 toolCall、工具还没跑」时，`messages` 里必须多什么？为什么？
+5. `paint` 何时整帧、何时改几行？`pause` 后为什么必须丢掉 `prevFrame`？
+6. 忙的时候又 Enter 了一句，这句话什么时候进 `messages`？画面上怎么和当前轮区分？
+7. 已配过 DeepSeek 再 `/setup` 加一个模型，为什么不再问 API key？换 key 呢？
+
+---
+
+## 仍然没有（代码里找不到是正常的）
+
+session / `-c` / `--resume`、`/compact`、skills、历史落盘、权限 ask、冒烟测试。
