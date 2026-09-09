@@ -1,11 +1,10 @@
-/**
- * Anthropic Messages API（stream）。
- * 发出：连续 toolResult 归并成一条 user（协议要求结果挂在 user 下）。
- * 收回：按 content_block 下标累积，stop_reason 收成 StopReason。
- */
+// Anthropic Messages API（stream）。
+// 发出：连续 toolResult 归并成一条 user（协议要求结果挂在 user 下）。
+// 收回：按 content_block 下标累积，stop_reason 收成 StopReason。
 import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
 
+// 内部 Message → Anthropic 线格式。连续 toolResult 必须并进同一条 user。
 function toWire(messages: Message[]): any[] {
   const out: any[] = [];
   let results: any[] = [];
@@ -33,6 +32,7 @@ function toWire(messages: Message[]): any[] {
   return out;
 }
 
+// 线上 stop_reason → 内部 StopReason。未知值沿用上一次，避免空 delta 把状态冲掉。
 function mapStop(reason: string | undefined, prev: StopReason): StopReason {
   switch (reason) {
     case "end_turn":
@@ -46,32 +46,45 @@ function mapStop(reason: string | undefined, prev: StopReason): StopReason {
   }
 }
 
+// 流里按下标攒的块 → 内部 AssistantMessage。空洞下标丢掉。不是线上格式。
+function toInternalAssistant(
+  content: (TextContent | ToolCall)[],
+  stopReason: StopReason,
+  usage: { input: number; output: number },
+): AssistantMessage {
+  return { role: "assistant", content: content.filter(Boolean), stopReason, usage };
+}
+
+// 流式 messages 接口。signal 与半截返回语义同 callOpenAI。
 export async function callAnthropic(
   provider: ProviderConf,
   systemPrompt: string,
   messages: Message[],
   tools: any[],
   onText: (delta: string) => void,
+  signal?: AbortSignal,
 ): Promise<AssistantMessage> {
-  const res = await fetch(`${provider.baseURL}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "anthropic-version": "2023-06-01",
-      ...(provider.auth === "bearer" ? { authorization: `Bearer ${provider.apiKey}` } : { "x-api-key": provider.apiKey! }),
-    },
-    body: JSON.stringify({ model: provider.model, max_tokens: 16384, stream: true, system: systemPrompt, messages: toWire(messages), tools }),
-  });
-  if (!res.ok || !res.body) throw new Error(`API error ${res.status}: ${await res.text()}`);
-
   // 按下标放块；未处理的类型会留下空洞，最后 filter(Boolean) 丢掉
   const content: (TextContent | ToolCall)[] = [];
   const jsonBuf: string[] = [];
   let stopReason: StopReason = "stop";
   const usage = { input: 0, output: 0 };
+  try {
+    const res = await fetch(`${provider.baseURL}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        // Kimi 目录写 bearer；官方 Anthropic 才是 x-api-key。
+        ...(provider.auth === "bearer" ? { authorization: `Bearer ${provider.apiKey}` } : { "x-api-key": provider.apiKey! }),
+      },
+      body: JSON.stringify({ model: provider.model, max_tokens: 16384, stream: true, system: systemPrompt, messages: toWire(messages), tools }),
+      signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`API error ${res.status}: ${await res.text()}`);
 
-  for await (const ev of sseJson(res)) {
-    switch (ev.type) {
+    for await (const ev of sseJson(res)) {
+      switch (ev.type) {
       case "message_start":
         usage.input = ev.message?.usage?.input_tokens ?? 0;
         break;
@@ -111,7 +124,14 @@ export async function callAnthropic(
         break;
       case "error":
         throw new Error(`API stream error: ${ev.error?.message ?? JSON.stringify(ev)}`);
+      }
     }
+    return toInternalAssistant(content, stopReason, usage);
+  } catch (e) {
+    // 同 openai：有半截就返回，空的再抛 AbortError。
+    if (e instanceof Error && e.name === "AbortError") {
+      if (content.filter(Boolean).length) return toInternalAssistant(content, stopReason, usage);
+    }
+    throw e;
   }
-  return { role: "assistant", content: content.filter(Boolean), stopReason, usage };
 }

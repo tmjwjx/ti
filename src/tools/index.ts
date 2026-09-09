@@ -1,4 +1,4 @@
-/** 工具 schema + 按名分发。schema 原样给 Anthropic；OpenAI 在请求里再包一层 function。 */
+// 工具 schema + 按名分发。schema 原样给 Anthropic；OpenAI 在请求里再包一层 function。
 import { readTool } from "./read.ts";
 import { writeTool } from "./write.ts";
 import { editTool } from "./edit.ts";
@@ -68,7 +68,8 @@ export const TOOLS = [
   },
 ];
 
-export async function runTool(name: string, input: any): Promise<string> {
+// 按名分发。只有 bash 吃 signal；读写改是同步文件操作，打断意义不大。
+export async function runTool(name: string, input: any, signal?: AbortSignal): Promise<string> {
   switch (name) {
     case "read":
       return readTool(input);
@@ -77,7 +78,7 @@ export async function runTool(name: string, input: any): Promise<string> {
     case "edit":
       return editTool(input);
     case "bash":
-      return bashTool(input);
+      return bashTool(input, signal);
     default:
       throw new Error(`unknown tool: ${name}`);
   }

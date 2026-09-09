@@ -1,7 +1,5 @@
-/**
- * 把 SSE 的 data: 行解析成 JSON。
- * 一帧可能跨多个 TCP 包，不完整的尾巴留在缓冲区等下次拼。
- */
+// 把 SSE 的 data: 行解析成 JSON。
+// 一帧可能跨多个 TCP 包，不完整的尾巴留在缓冲区等下次拼。
 export async function* sseJson(res: Response): AsyncGenerator<any> {
   const decoder = new TextDecoder();
   let sse = "";
