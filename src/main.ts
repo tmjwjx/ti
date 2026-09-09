@@ -1,71 +1,92 @@
-/**
- * 入口文件。node src/main.ts 打开本文件，最后一行调用 main()。
- * main 不是给操作系统找的，只是把启动步骤收在一个函数里。
- *
- * 顺序：扫命令行 → 选定厂家 → 拼 systemPrompt 和终端 UI → 有 prompt 单发一轮，否则进 REPL。
- * 本文件不跑模型、不跑工具，只装配，交给 agentTurn / repl。
- */
+// 入口。扫命令行 → 缺配置则走指引 → 进 REPL
+// 本文件不跑模型、不跑工具
 import type { Message } from "./types.ts";
-import { ensureSettings, resolveProvider, setProvider, settings } from "./config/index.ts";
+import { isProviderReady, resolveProvider, setProvider, settings } from "./config/index.ts";
 import { buildSystemPrompt } from "./core/prompt.ts";
-import { agentTurn, type AgentContext } from "./core/agent.ts";
-import { createTerminalUI, red } from "./cli/render.ts";
+import { createTerminalUI } from "./cli/render.ts";
 import { repl } from "./cli/repl.ts";
+import { openTui } from "./cli/tui.ts";
+import type { Tui } from "./cli/tui.ts";
+import { FormAbort } from "./cli/form.ts";
+import { runSetup } from "./cli/setup.ts";
 
+// 打印用法并退出
 function help(code: number): never {
   console.log(`ti
-usage: ti [--provider name] [-m model] [-p prompt | prompt words...]
-  -p, --prompt     run a single prompt non-interactively (default: interactive REPL)
-  -m, --model      model name (overrides settings.json / preset default)
-      --provider   provider: deepseek (default) | custom names from settings.json
-config: ~/.ti/settings.json — { "provider": "deepseek", "providers": { "<name>": { "baseURL", "model", "apiKey" } } }`);
+usage: ti [setup] [--provider name] [-m model]
+  setup            configure provider, model, and API key
+  -m, --model      model name
+      --provider   deepseek | kimi | glm | custom names from settings.json
+config: ~/.ti/settings.json`);
   process.exit(code);
 }
 
-async function main() {
-  // argv[0] 是 node，argv[1] 是本文件路径，从 [2] 起才是用户敲的参数
-  let cliProvider: string | undefined; // 命令行参数 --provider 的值
-  let cliModel: string | undefined; // 命令行参数 -m 或 --model 的值
-  let prompt: string | undefined; // 命令行参数 -p 或 --prompt 的值
-  const rest: string[] = []; // 命令行参数中除了 -p、-m、--provider 和 --help 之外的所有参数
-  const args = process.argv.slice(2); 
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === "--provider" && args[i + 1]) cliProvider = args[++i];
-    else if ((a === "-m" || a === "--model") && args[i + 1]) cliModel = args[++i];
-    else if ((a === "-p" || a === "--prompt") && args[i + 1]) prompt = args[++i];
-    else if (a === "-h" || a === "--help") help(0);
-    else rest.push(a);
-  }
-  // -p 没写时，剩下的词拼成一句，也当单发；什么都不跟则 prompt 仍是 undefined，走 REPL
-  prompt ??= rest.length ? rest.join(" ") : undefined;
+// 是不是交互终端
+function isTty(): boolean {
+  return !!(process.stdin.isTTY && process.stdout.isTTY);
+}
 
-  ensureSettings();
-  // CLI 厂家 > settings.json 的 provider > 默认 deepseek；-m 再压过模型
-  try {
-    setProvider(resolveProvider(cliProvider ?? settings.provider ?? "deepseek", cliModel));
-  } catch (e) {
-    console.error(`error: ${e instanceof Error ? e.message : String(e)}`);
+// 缺配置时走指引
+async function maybeSetup(force: boolean, tui?: Tui): Promise<void> {
+  const name = settings.provider;
+  if (!force && isProviderReady(name)) return;
+  if (!isTty()) {
+    console.error("error: no usable config — run ti in a terminal");
     process.exit(1);
   }
-
-  // 一轮对话要用的两样：发给模型的系统提示词，以及往终端画的 UI
-  const ctx: AgentContext = { systemPrompt: await buildSystemPrompt(), ui: createTerminalUI() };
-
-  // messages 是整段对话的唯一状态，单发和 REPL 共用
-  const messages: Message[] = [];
-  if (prompt !== undefined) {
-    messages.push({ role: "user", content: prompt });
-    try {
-      await agentTurn(messages, ctx);
-    } catch (e) {
-      console.error(red(`\nerror: ${e instanceof Error ? e.message : String(e)}`));
-      process.exitCode = 1; // 给脚本/CI 用，不立刻 exit，好让后面的 console.log 打完
-    }
-    console.log();
-  } else {
-    await repl(messages, ctx);
+  try {
+    const r = await runSetup(tui);
+    // `ti setup` 取消且本来就能用：正常退出。冷启动取消：失败
+    if (r !== "saved") process.exit(force && isProviderReady(settings.provider) ? 0 : 1);
+  } catch (e) {
+    if (e instanceof FormAbort) process.exit(1);
+    throw e;
   }
+}
+
+// 启动
+async function main() {
+  let forceSetup = false;
+  let cliProvider: string | undefined;
+  let cliModel: string | undefined;
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "setup") forceSetup = true;
+    else if (a === "--provider" && args[i + 1]) cliProvider = args[++i]; // ++i 吃掉下一个参数当值
+    else if ((a === "-m" || a === "--model") && args[i + 1]) cliModel = args[++i];
+    else if (a === "-h" || a === "--help") help(0);
+    else {
+      console.error(`error: unknown argument ${a}`);
+      help(1);
+    }
+  }
+
+  const tui = isTty() ? openTui() : undefined;
+  try {
+    await maybeSetup(forceSetup, tui);
+
+    // --provider 若还没配 key，不能用，退回 settings 里当前那家
+    const name = cliProvider && isProviderReady(cliProvider) ? cliProvider : settings.provider;
+    try {
+      setProvider(resolveProvider(name, cliModel));
+    } catch (e) {
+      console.error(`error: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
+
+    const systemPrompt = await buildSystemPrompt();
+    const messages: Message[] = [];
+    if (tui) {
+      await repl(messages, { systemPrompt, ui: createTerminalUI(tui) }, tui);
+    } else {
+      await repl(messages, { systemPrompt, ui: createTerminalUI() });
+    }
+  } finally {
+    tui?.close();
+  }
+  // raw 模式退出后，显式 exit，避免 stdin 还 resume 着把进程挂住
+  if (tui) process.exit(0);
 }
 
 await main();
