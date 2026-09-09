@@ -1,10 +1,10 @@
-// OpenAI chat/completions 兼容协议（stream）。
-// 发出：system 单独一条；toolResult 1:1 成 role:"tool"。
-// 收回：tool_calls 按 index 拼 arguments，finish_reason 收成 StopReason。
+// OpenAI chat/completions 兼容协议（stream）
+// 发出：system 单独一条；toolResult 1:1 成 role:"tool"
+// 收回：tool_calls 按 index 拼 arguments，finish_reason 收成 StopReason
 import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
 
-// 内部 Message → OpenAI 线格式。assistant 的文本和 tool_calls 被拆成两个字段。
+// 内部消息收成 OpenAI 线格式
 function toWire(systemPrompt: string, messages: Message[]): any[] {
   const oaiMessages: any[] = [{ role: "system", content: systemPrompt }];
   for (const m of messages) {
@@ -16,7 +16,7 @@ function toWire(systemPrompt: string, messages: Message[]): any[] {
       const toolCalls = m.content.filter((b): b is ToolCall => b.type === "toolCall").map((tc) => ({
         id: tc.id, type: "function", function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
       }));
-      // 只有 tool_calls 时 content 必须是 null，空字符串有的端点会拒。
+      // 只有 tool_calls 时 content 必须是 null，空字符串有的端点会拒
       oaiMessages.push({ role: "assistant", content: text || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
     } else {
       oaiMessages.push({ role: "tool", tool_call_id: m.toolCallId, content: m.content });
@@ -25,7 +25,7 @@ function toWire(systemPrompt: string, messages: Message[]): any[] {
   return oaiMessages;
 }
 
-// 流里攒的碎片 → 内部 AssistantMessage。不是线上格式（线上是 toWire 的反方向）。
+// 流碎片收成内部 assistant 消息
 function toInternalAssistant(
   text: string,
   calls: Record<number, { id: string; name: string; args: string }>,
@@ -46,7 +46,7 @@ function toInternalAssistant(
   return { role: "assistant", content, stopReason, usage };
 }
 
-// 流式 chat/completions。signal 取消时：有半截就返回，空的抛 AbortError。
+// 走 OpenAI 兼容的流式接口
 export async function callOpenAI(
   provider: ProviderConf,
   systemPrompt: string,
@@ -88,7 +88,7 @@ export async function callOpenAI(
         onText(delta.content);
       }
       for (const tc of delta.tool_calls ?? []) {
-        // 同一 index 的碎片拼 arguments；??= 只在第一次见到这个下标时建槽。
+        // 同一 index 的碎片拼 arguments；??= 只在第一次见到这个下标时建槽
         const c = (calls[tc.index] ??= { id: "", name: "", args: "" });
         if (tc.id) c.id = tc.id;
         if (tc.function?.name) c.name = tc.function.name;
@@ -100,7 +100,7 @@ export async function callOpenAI(
     }
     return toInternalAssistant(text, calls, stopReason, usage);
   } catch (e) {
-    // 有半截就当正常返回，让历史能接；完全没数据再抛，agent 只打 [interrupted]。
+    // 有半截就当正常返回，让历史能接；完全没数据再抛，agent 只打 [interrupted]
     if (e instanceof Error && e.name === "AbortError") {
       if (text || Object.keys(calls).length) return toInternalAssistant(text, calls, stopReason, usage);
     }

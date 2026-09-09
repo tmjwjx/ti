@@ -1,7 +1,5 @@
-/**
- * 一处或多处替换。oldText 必须与原文完全一致且只出现一次。
- * 所有 edits 都对原文件匹配，先全部校验再写回，避免改到一半。
- */
+// 一处或多处替换。oldText 必须与原文完全一致且只出现一次
+// 所有 edits 都对原文件匹配，先全部校验再写回，避免改到一半
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 

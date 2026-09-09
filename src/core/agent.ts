@@ -1,5 +1,5 @@
-// 一轮用户输入：问模型 → 有 toolCall 就执行并回灌 → 再问。
-// 没有工具调用或超过 MAX_TURNS 则结束。状态就是 messages。
+// 一轮用户输入：问模型 → 有 toolCall 就执行并回灌 → 再问
+// 没有工具调用或超过 MAX_TURNS 则结束。状态就是 messages
 import type { Message, TextContent, ToolCall } from "../types.ts";
 import { getProvider } from "../config/index.ts";
 import { callLLM, isAbortError } from "../llm/index.ts";
@@ -7,7 +7,7 @@ import { runTool, TOOLS } from "../tools/index.ts";
 
 const MAX_TURNS = 100;
 
-// cli 注入。core 只发事件，不打印。
+// cli 注入。core 只发事件，不打印
 export interface AgentUI {
   text(delta: string): void;
   toolCall(tc: ToolCall): void;
@@ -22,10 +22,9 @@ export interface AgentContext {
   signal?: AbortSignal;
 }
 
-// 打断时补齐未完成的 toolResult。
-// Anthropic 与 OpenAI 都要求每个 toolCall 有对应结果，否则下一轮 400。
+// 打断时补上缺失的 toolResult
 function sealTools(msg: { content: (TextContent | ToolCall)[] }, ui: AgentUI, messages: Message[], reason: string) {
-  // `b is ToolCall`：收窄类型，后面能读 tc.id。
+  // 每个 toolCall 必须有对应结果，否则下一轮协议 400
   const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
   for (const tc of toolCalls) {
     ui.result(reason, true);
@@ -33,8 +32,7 @@ function sealTools(msg: { content: (TextContent | ToolCall)[] }, ui: AgentUI, me
   }
 }
 
-// 一轮用户输入的循环。signal.aborted 时停：没数据就返回；已有 toolCall 先 seal 再返回。
-// AbortError 在这里吃掉，不抛给 REPL，避免把刚 push 的 user 误 pop。
+// 处理一轮用户输入
 export async function agentTurn(messages: Message[], ctx: AgentContext): Promise<void> {
   const { ui, signal } = ctx;
   for (let turn = 0; ; turn++) {
@@ -50,7 +48,7 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
     try {
       msg = await callLLM(getProvider(), ctx.systemPrompt, messages, TOOLS, ui.text, signal);
     } catch (e) {
-      // 流还没攒出 assistant 就 abort：这里返回。REPL 不会 pop user。
+      // 流还没攒出 assistant 就 abort：这里返回。REPL 不会 pop user
       if (isAbortError(e)) {
         ui.info("[interrupted]");
         return;
@@ -62,7 +60,7 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
       msg.usage.input || msg.usage.output
         ? `  ${msg.usage.input.toLocaleString("en-US")} in · ${msg.usage.output.toLocaleString("en-US")} out`
         : "";
-    // usage 全 0（流被掐断常见）就不打，避免刷 0 in · 0 out。
+    // usage 全 0（流被掐断常见）就不打，避免刷 0 in · 0 out
     const noteTokens = () => {
       if (tokenLine) ui.info(tokenLine);
     };

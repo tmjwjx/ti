@@ -1,4 +1,4 @@
-/** 带行号读文件。offset 从 1 起，可和 limit 一起分页。 */
+// 带行号读文件。offset 从 1 起，可和 limit 一起分页
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { truncate } from "./truncate.ts";

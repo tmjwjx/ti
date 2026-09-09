@@ -1,10 +1,10 @@
-// Anthropic Messages API（stream）。
-// 发出：连续 toolResult 归并成一条 user（协议要求结果挂在 user 下）。
-// 收回：按 content_block 下标累积，stop_reason 收成 StopReason。
+// Anthropic Messages API（stream）
+// 发出：连续 toolResult 归并成一条 user（协议要求结果挂在 user 下）
+// 收回：按 content_block 下标累积，stop_reason 收成 StopReason
 import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
 
-// 内部 Message → Anthropic 线格式。连续 toolResult 必须并进同一条 user。
+// 内部消息收成 Anthropic 线格式
 function toWire(messages: Message[]): any[] {
   const out: any[] = [];
   let results: any[] = [];
@@ -32,7 +32,7 @@ function toWire(messages: Message[]): any[] {
   return out;
 }
 
-// 线上 stop_reason → 内部 StopReason。未知值沿用上一次，避免空 delta 把状态冲掉。
+// 线上 stop_reason 收成内部 StopReason
 function mapStop(reason: string | undefined, prev: StopReason): StopReason {
   switch (reason) {
     case "end_turn":
@@ -42,11 +42,12 @@ function mapStop(reason: string | undefined, prev: StopReason): StopReason {
     case "tool_use":
       return "toolUse";
     default:
+      // 空 delta 不要把已有状态冲掉
       return prev;
   }
 }
 
-// 流里按下标攒的块 → 内部 AssistantMessage。空洞下标丢掉。不是线上格式。
+// 流碎片收成内部 assistant 消息
 function toInternalAssistant(
   content: (TextContent | ToolCall)[],
   stopReason: StopReason,
@@ -55,7 +56,7 @@ function toInternalAssistant(
   return { role: "assistant", content: content.filter(Boolean), stopReason, usage };
 }
 
-// 流式 messages 接口。signal 与半截返回语义同 callOpenAI。
+// 走 Anthropic 流式接口
 export async function callAnthropic(
   provider: ProviderConf,
   systemPrompt: string,
@@ -75,7 +76,7 @@ export async function callAnthropic(
       headers: {
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
-        // Kimi 目录写 bearer；官方 Anthropic 才是 x-api-key。
+        // provider.auth 是 bearer 走 Authorization，否则 x-api-key
         ...(provider.auth === "bearer" ? { authorization: `Bearer ${provider.apiKey}` } : { "x-api-key": provider.apiKey! }),
       },
       body: JSON.stringify({ model: provider.model, max_tokens: 16384, stream: true, system: systemPrompt, messages: toWire(messages), tools }),
@@ -128,7 +129,7 @@ export async function callAnthropic(
     }
     return toInternalAssistant(content, stopReason, usage);
   } catch (e) {
-    // 同 openai：有半截就返回，空的再抛 AbortError。
+    // 同 openai：有半截就返回，空的再抛 AbortError
     if (e instanceof Error && e.name === "AbortError") {
       if (content.filter(Boolean).length) return toInternalAssistant(content, stopReason, usage);
     }

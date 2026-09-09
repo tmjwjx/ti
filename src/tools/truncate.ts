@@ -1,4 +1,4 @@
-/** 先按行数截，再按字节截，避免工具输出撑爆上下文。 */
+// 先按行数截，再按字节截，避免工具输出撑爆上下文
 export const MAX_LINES = 2000;
 export const MAX_BYTES = 50 * 1024;
 

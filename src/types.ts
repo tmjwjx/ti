@@ -1,4 +1,4 @@
-/** 内部消息与运行配置。各家 API 的线格式在 llm/ 翻译，不绑在这里。 */
+// 内部消息与运行配置。各家 API 的线格式在 llm 里翻译，不绑在这里
 
 export type Protocol = "anthropic" | "openai";
 
@@ -15,7 +15,7 @@ export type TextContent = { type: "text"; text: string };
 // arguments 是 parse 后的对象，不是线上的 JSON 字符串
 export type ToolCall = { type: "toolCall"; id: string; name: string; arguments: Record<string, any> };
 
-/** stop 正常结束 / length 输出被截断 / toolUse 要调工具 */
+// stop 正常结束，length 输出被截断，toolUse 要调工具
 export type StopReason = "stop" | "length" | "toolUse";
 
 export type UserMessage = { role: "user"; content: string | TextContent[] };

@@ -1,4 +1,4 @@
-/** 创建或覆盖文件；父目录不存在就建。 */
+// 创建或覆盖文件；父目录不存在就建
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 

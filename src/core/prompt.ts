@@ -1,14 +1,15 @@
-/** 系统提示词。工具清单从 TOOLS 生成；有 AGENTS.md / CLAUDE.md 则追加。 */
+// 系统提示词
 import { readFile } from "node:fs/promises";
 import { TOOLS } from "../tools/index.ts";
 
+// 拼给模型的系统提示
 export async function buildSystemPrompt(): Promise<string> {
   let projectContext = "";
   for (const file of ["AGENTS.md", "CLAUDE.md"]) {
     try {
       projectContext += `\n\n<project_context path="${file}">\n${await readFile(file, "utf8")}\n</project_context>`;
     } catch {
-      /* 文件不存在则跳过 */
+      // 文件不存在则跳过
     }
   }
 
@@ -30,10 +31,8 @@ Current working directory: ${process.cwd()}
 Current date: ${new Date().toISOString().slice(0, 10)}${projectContext}`;
 }
 
-/*
-  中文对照（不发给模型）：
-  你是 ti 里的编程助手：读写改文件、跑命令。
-  可用工具：由 TOOLS 的 name + description 生成。
-  准则：简短；写出路径；用 bash 做 ls/rg/find；小改用 edit，新建或整文件用 write；能编测就编测。
-  当前目录 / 日期；有 AGENTS.md 或 CLAUDE.md 再追加。
-*/
+// 中文对照（不发给模型）：
+// 你是 ti 里的编程助手：读写改文件、跑命令
+// 可用工具：由 TOOLS 的 name + description 生成
+// 准则：简短；写出路径；用 bash 做 ls、rg、find；小改用 edit，新建或整文件用 write；能编测就编测
+// 当前目录与日期；有 AGENTS.md 或 CLAUDE.md 再追加
