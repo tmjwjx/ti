@@ -17,8 +17,8 @@
 │              resolveProvider() → { protocol, baseURL, model, key } │
 │              预设：deepseek(默认 flash，含 pro) / anthropic         │
 │                                                                    │
-│  交互层    REPL (readline 异步迭代)        单发模式 (-p prompt)     │
-│              └──────────────┬──────────────────┘                   │
+│  交互层    REPL (readline 异步迭代)                                 │
+│                             │                                      │
 │                             ▼                                      │
 │  循环层    agentTurn(messages)   ←—— 唯一状态：messages[] 数组      │
 │              │  流式请求 → 执行工具 → 结果回灌 → 循环               │
@@ -66,7 +66,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant U as 用户
-    participant R as REPL / 单发
+    participant R as REPL
     participant L as agentTurn
     participant A as LLM API
     participant T as runTool

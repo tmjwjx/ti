@@ -8,7 +8,7 @@
 1. **模块化单职责**：按层拆分，每个文件一个明确职责、可独立理解、可独立测试；不设行数硬指标，职责清晰为准
 2. **零依赖**：只用 Node 标准库（fs/path/os/readline/child_process/crypto）
 3. **协议无关内核**：循环层/工具层只面对自定义内部消息格式（`types.ts` 的消息联合）与 `ProviderConf`，新增功能不碰协议转换层
-4. **失败就地回灌**：工具/权限/中断的失败都转成 `isError` 的 toolResult 消息回灌模型，loop 永不崩溃
+4. **失败就地回灌**：工具失败转成 `isError` 的 toolResult 回灌模型。中断走 `finishInterrupted`（未配 toolCall 只 seal；否则 push `user("[interrupted]")`）。loop 不因这些失败崩溃
 5. **状态三处**：对话状态 = `messages[]`（内存）→ `~/.ti/sessions/*.jsonl`（持久化）；配置 = `~/.ti/settings.json`；输入历史 = `~/.ti/history`
 6. **免构建**：Node type-stripping 直接运行 `.ts`；相对 import 必须带 `.ts` 扩展名；只用可擦除语法（无 enum/namespace/参数属性）
 7. **注释**：每个函数上方一两句中文说明功能/关键逻辑；复杂业务在步骤旁讲清为什么和分支。一眼能看懂的代码不堆注释。标识符英文，注释中文。
@@ -24,7 +24,7 @@ ti/
 ├── scripts/
 │   └── smoke.mjs             # F8 冒烟测试（内置双协议 mock server + 断言）
 └── src/
-    ├── main.ts               # 唯一入口（薄）：hashbang、CLI 参数解析、装配、-c/--resume、单发/REPL 分发
+    ├── main.ts               # 唯一入口（薄）：hashbang、CLI 参数解析、装配、-c/--resume、REPL 分发
     ├── types.ts              # 领域模型（纯类型）：Message 联合 / 内容块 / ProviderConf / Skill / SessionMeta…
     ├── cli/                  # 接口层：终端交互适配（不被任何模块依赖）
     │   ├── repl.ts           #   REPL 主循环、斜杠命令（/model /provider /compact /cost /clear）
@@ -62,7 +62,7 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 
 务实说明：core 直接 import 适配层具体实现，不引入接口抽象/DI 容器——项目体量下 ports-and-adapters 全套是过度设计；规则的价值在于**依赖方向单一**，不在形式。
 
-**全局可变状态只住三处**：`config/index.ts`（当前 provider）、`core/session.ts`（当前会话写入器）、`core/agent.ts`（totals、currentAbort）。其余模块全部无状态，便于测试与替换。
+**全局可变状态只住三处**：`config/index.ts`（当前 provider）、`core/session.ts`（当前会话写入器）、REPL（本轮 `AbortController`、`lastTurn`）。其余模块全部无状态，便于测试与替换。
 
 **路径管理**：所有 `~/.ti` 下的路径（settings/sessions/history/skills）集中在 `config/paths.ts`，支持 `TI_HOME` 环境变量整体覆盖——冒烟测试（F8）用 `TI_HOME=/tmp/xxx` 做隔离，不再需要 Hack HOME。
 
@@ -93,21 +93,32 @@ function latestSessionFor(cwd: string): string | null  // 按文件名倒序找�
 
 **写入时机**：模块级 `let session: SessionWriter | null`；所有 `messages.push(...)` 收敛为一个 `pushMessage(msg)` 辅助函数（REPL 输入、agentTurn 内 assistant/tool_result、compact 摘要都走它），内部同步 `session.append()`。追加写用 `appendFileSync`（每行一条、量小，同步写最简单可靠）。
 
-**恢复流程**：`-c/--continue` → `latestSessionFor(cwd)`；`--resume` → `listSessions()` 打印编号列表（时间、cwd、首条用户消息前 60 字、消息数），读序号选择。恢复后打印 `dim` 提示（恢复自哪个文件、多少条消息），然后正常进 REPL/单发。找不到时打印提示并全新开始（不报错退出）。
+**恢复流程**：`-c/--continue` → `latestSessionFor(cwd)`；`--resume` → `listSessions()` 打印编号列表（时间、cwd、首条用户消息前 60 字、消息数），读序号选择。恢复后打印 `dim` 提示（恢复自哪个文件、多少条消息），然后正常进 REPL。找不到时打印提示并全新开始（不报错退出）。
 
 ### F2 · 中断
 
-**机制**：模块级 `let currentAbort: AbortController | null`。`agentTurn` 开始时 `currentAbort = new AbortController()`，结束/异常时置 null。信号贯穿：
+**机制**：REPL 每轮聊天建一个 `AbortController`，经 `ctx.signal` 贯穿 `agentTurn`：
 
-- `callLLM` → `fetch(url, { signal })`；abort 时 fetch 抛 AbortError，被捕获后按「部分响应」处理
-- bash 工具 → 增加可选 `signal` 参数：`signal.addEventListener("abort", () => child.kill("SIGTERM"))`
+- `callLLM` → `fetch(url, { signal })`。流变量 `stopReason` 是 `StopReason | undefined`，没有线上结束原因不默认 `"stop"`；收成内部消息时未给出结束原因 → `incomplete`，说完或正式 tool 结束但参数解不开 → `badArgs`
+- 流没有真实 finish（`incomplete`、`badArgs`）：不跑半截工具，seal 真实原因，屏幕只 `ui.error` 一次，停这一轮
+- `toolUse`，或 `stop` 且本条已有完整 toolCall：执行工具。`incomplete`、`badArgs`、`length` 不执行
+- 有 toolCall 但不执行（主要是 `length`）：补错误结果再继续；连续 3 次则停轮
+- 流正常结束且无字无工具：不把空 assistant 写进历史
+- bash 监听 abort → `SIGTERM`（2s 后 `SIGKILL`）
 - 工具循环每次迭代前检查 `signal.aborted` → 停止后续执行
 
-**协议合法性**（关键设计）：abort 发生时，若已构造的 assistant 消息里含 tool_use 块，则**每个未拿到结果的 tool_use 都补一条** `is_error:true, content:"aborted by user"` 的 tool_result 再入历史——Anthropic 与 OpenAI 两种协议都要求调用必须有结果，否则下一轮请求 400。
+**收尾** `finishInterrupted`（互斥，屏幕只打一次 `ui.info("[interrupted]")`）：
 
-**触发（TUI）**：Esc 或空输入时 Ctrl+C → `abort()`（当前 turn 收尾，打印 `[interrupted]`）；editor 有字时 Ctrl+C 只清空，不退出。空闲且输入为空时 Ctrl+C / Ctrl+D / `/exit` 退出。非 TTY readline 仍是空闲 Ctrl+C 退出。AbortSignal 贯穿 `fetch` 与 bash。
+- 栈尾有未配 toolCall：只 `sealTools`（`Error: aborted by user`），不再追加 interrupted user——调用必须有结果，否则下一轮 400
+- 否则（半截字或零字节）：留下已有内容（含 user），再 `push user("[interrupted]")`，避免下一轮是没人答的提问
 
-### F3 · 权限（默认 auto）
+零字节 abort 不 throw 出循环，由收尾写入说明。有半截内容的 abort 先收下 assistant，再走同一套收尾。
+
+**触发（TUI）**：没有 Ctrl+D。退出和打断只走 Ctrl+C：有字清空 → 向导取消 → busy 打断 → 空闲退出。Esc：向导取消 → 二级列表往回退 → busy 打断（不丢队列）→ 清空。`/exit` 退出。非 TTY readline 仍是空闲 Ctrl+C 退出。AbortSignal 贯穿 `fetch` 与 bash。
+
+### F3 · 权限（设计稿，未交付）
+
+产品决定：工具直接执行，没有权限确认。下面是一份可选的 ask 方案草稿，不是当前行为，也不是默认要确认。
 
 **配置**：`settings.json` 顶层 `permissions: "auto" | "ask"`；CLI `--ask` 强制 ask。优先级：`--ask` > settings > 默认 `auto`。
 
@@ -190,7 +201,7 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 ```
 
 - 新增 `LICENSE`（MIT，copyright tmjwjx）；README 在 v1.0 里程碑改为英文优先 + 中文小节
-- 验收：`npm pack --dry-run` 仅含白名单文件且 <100KB；`npm i -g .` 后 `ti --help`、`ti -p` 冒烟可用；**不执行 publish**
+- 验收：`npm pack --dry-run` 仅含白名单文件且 <100KB；`npm i -g .` 后 `ti --help`、`ti` 冒烟可用；**不执行 publish**
 
 ## 5. 测试设计（F8）
 
@@ -217,14 +228,14 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 | 权限提问与 for-await 主循环的 stdin 竞争 | readOneLine 直接读 stdin、不建第二 rl 实例；非 TTY 一律 deny |
 | session 文件无锁/无压缩 | 单用户单进程工具，线性追加足够；pi 同样从简 |
 | compact 用当前 provider 模型 | 不引入额外「小模型」配置，行为可预期 |
-| F2 TUI 用 Esc 打断 | 空闲退出仍是空输入 Ctrl+C / Ctrl+D / `/exit` |
+| F2 TUI 用 Esc 打断 | 空闲退出仍是空输入 Ctrl+C / `/exit`；没有 Ctrl+D |
 
 ## 7. 实施顺序（对应 PRD 里程碑）
 
 | 里程碑 | 内容 | 依赖 |
 |---|---|---|
 | v0.2 | **R0 拆分重构**（单文件 → §2 的 src/ 结构，行为不变、冒烟回归）→ F1 session + F2 中断 | F1 的 pushMessage 收敛先行；F2 依赖 F1 的协议合法性设计 |
-| v0.3 | F3 权限 + F4 compact + F5 历史/多行 + F6 token 累计 | F4 依赖 F1 的 compact 标记；F3 独立于其他 |
+| v0.3 | F3 无权限确认（工具直接执行）+ F4 compact + F5 历史、多行 + F6 token 累计 | F4 依赖 F1 的 compact 标记；F3 无实现项 |
 | v0.4 | F9 skills + F10 /provider | 只动系统提示词与 REPL，互不依赖 |
 | v1.0 | F7 打包 + F8 冒烟测试 + 英文 README + 打磨 | F8 覆盖 v0.2-v0.4 全部场景 |
 

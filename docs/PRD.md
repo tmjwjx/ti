@@ -20,9 +20,9 @@ ti 是一个极简 coding agent CLI，设计主要参考两个开源项目：
 
 **一句话**：`npm i -g @tmjwjx/ti` 装完即用的极简 coding agent，单文件、零依赖、双协议（Anthropic / OpenAI 兼容），面向想读得懂每一行源码的开发者。
 
-**v1.0 目标**：基本可用——日常真实编码任务可以全程在 ti 里完成，不掉链子（会话可恢复、可中断、危险操作有确认、上下文可压缩）。
+**v1.0 目标**：基本可用——日常真实编码任务可以全程在 ti 里完成，不掉链子（会话可恢复、可中断、上下文可压缩）。
 
-**非目标（YAGNI，明确不做）**：插件/扩展系统、Web UI、MCP、子 agent、PTC 模式、主题系统、内置 todo 工具（用 TODO.md 文件代替，pi 哲学）。skills 只做本地目录扫描的基础机制（F9），不做市场/包分发。
+**非目标（YAGNI，明确不做）**：插件/扩展系统、Web UI、MCP、子 agent、PTC 模式、主题系统、内置 todo 工具（用 TODO.md 文件代替，pi 哲学）；权限确认（工具直接执行，没有 ask）。skills 只做本地目录扫描的基础机制（F9），不做市场/包分发。
 
 ## 3. 目标用户与场景
 
@@ -34,19 +34,19 @@ ti 是一个极简 coding agent CLI，设计主要参考两个开源项目：
 
 ### 4.1 已完成（v0.1 现状）
 
-agent loop（流式请求→工具执行→结果回灌→循环）；4 工具（read/write/edit/bash，参数对齐 pi）；双协议（Anthropic Messages / OpenAI chat completions）；max_tokens 截断保护；配置体系（CLI > `~/.ti/settings.json` > 预设；不采用环境变量的值）；REPL（`/model` `/clear` `/exit`）+ 单发模式；AGENTS.md/CLAUDE.md 自动注入；token 每轮统计。
+agent loop（流式请求→工具执行→结果回灌→循环）；4 工具（read/write/edit/bash，参数对齐 pi）；双协议（Anthropic Messages / OpenAI chat completions）；max_tokens 截断保护；配置体系（CLI > `~/.ti/settings.json` > 预设；不采用环境变量的值）；REPL（`/model` `/clear` `/exit`）；工具直接执行，没有权限确认；AGENTS.md/CLAUDE.md 自动注入；token 每轮统计。
 
 ### 4.2 v1.0 新增（基本可用必备）
 
 | # | 功能 | 描述 | 验收标准 |
 |---|---|---|---|
 | F1 | **session 持久化与恢复** | 消息历史实时追加写入 `~/.ti/sessions/<cwd目录名>-<时间戳>.jsonl`（首行 meta：cwd/provider/model/创建时间）；`ti -c/--continue` 继续当前目录最近一次会话；`ti --resume` 列出最近会话选择 | 杀掉进程后 `ti -c` 能完整接续上下文；session 文件可直接 `cat` 阅读 |
-| F2 | **中断** | agent 执行期间按 Ctrl+C 中断当前 turn（AbortController 贯穿 fetch 与 bash spawn），回到提示符不退出；空闲时 Ctrl+C 退出（Esc 不做，见 DESIGN.md §3-F2） | 长跑 bash 命令能被打断；被打断的 turn 以「已中断」标记写入历史，loop 状态合法 |
-| F3 | **权限模式（默认 auto，pi 风格）** | 默认不打扰：所有工具直接执行（与 pi 一致）；配置 `permissions:"ask"` 或启动加 `--ask` 才启用确认——write/edit/bash 执行前弹 `y` 本次 / `a` 本会话同类放行 / `n` 拒绝（错误回灌模型）；`read` 永远免确认；非 TTY（管道）无法提问时按拒绝处理并提示 | 默认全程无确认；ask 模式下 write/bash 必先弹确认；拒绝后模型收到权限错误并调整 |
+| F2 | **中断** | agent 执行期间 Ctrl+C 或 Esc 中断当前 turn（AbortSignal 贯穿 fetch 与 bash），回到提示符不退出。收尾走 `finishInterrupted`：未配 toolCall 只 seal；否则留下已有内容并 push `user("[interrupted]")`；屏幕 `ui.info("[interrupted]")`。空闲时 Ctrl+C 退出（见 4.4 与 DESIGN.md §3-F2） | 长跑 bash 命令能被打断；被打断的 turn 协议合法，屏幕出现 `[interrupted]` |
+| F3 | **无权限确认（不做）** | 工具直接执行，没有权限确认。ask 方案见 DESIGN.md F3 设计稿，不是交付项 | 调用工具时立即执行，终端不出现确认 |
 | F4 | **/compact 上下文压缩** | 把当前消息历史发给模型生成结构化摘要（已完成事项/改动文件/关键决策/待办），替换为单条摘要消息继续会话；原始历史保留在 session 文件 | 压缩后 token 数显著下降；模型能基于摘要正确接续工作 |
 | F5 | **输入体验** | readline 历史持久化到 `~/.ti/history`（上限 1000 条）；支持 `\` 续行多行输入 | 重启后方向键↑能翻出上次会话的命令 |
 | F6 | **token 会话累计** | 每轮已有统计基础上加会话累计；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到 v1.1） | `/cost` 显示累计 in/out token 与会话轮数 |
-| F7 | **npm 打包就绪（不发布）** | 方案 A：hashbang + `bin:{"ti":"./agent.ts"}` + `engines:{"node":">=22.18.0"}` + `files` 白名单 + MIT LICENSE + 英文优先 README（保留中文小节）；`npm pack` 检查产物；全局安装自测 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti -p "..."` 在 Node 22.18+ 可用 |
+| F7 | **npm 打包就绪（不发布）** | 方案 A：hashbang + `bin:{"ti":"./agent.ts"}` + `engines:{"node":">=22.18.0"}` + `files` 白名单 + MIT LICENSE + 英文优先 README（保留中文小节）；`npm pack` 检查产物；全局安装自测 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
 | F8 | **冒烟测试** | `scripts/smoke.mjs`：内置 mock server（OpenAI 协议）+ 罐头 SSE，跑通「工具调用全链路 / 配置优先级 / /model」断言；`npm test` 可跑 | 无真实 API key 时 `npm test` 全绿 |
 | F9 | **skills** | 启动时扫描 `~/.ti/skills/*/SKILL.md` 与项目 `.ti/skills/*/SKILL.md`，解析 frontmatter 的 name/description（手写两行解析，不引 yaml 库），把技能清单（名称+一句话）追加进系统提示词；模型按需用现有 read 工具读取完整 SKILL.md——渐进披露，pi 同款机制 | 放一个 SKILL.md 到 skills 目录后，agent 能在对话中识别并正确按技能指示行动 |
 | F10 | **/provider 命令** | REPL 内 `/provider` 列出全部可用 provider（内置预设 + settings.json 自定义，标注当前）；`/provider <name>` 整套切换（baseURL/key/默认模型）；分工明确：/provider 换配置、/model 只换模型名 | 不重启即可在 deepseek / anthropic / 自定义配置间切换 |
@@ -62,9 +62,9 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 - footer：`provider:model · cwd · turn in/out · session in/out`；模型在跑时右侧 `esc interrupt`
 - 每轮 LLM 调用后 transcript 打 token；`/cost` 看会话累计
 - 输入 `/` 出命令列表，↑↓ 选，Tab 补全，Enter 提交
-- editor：Ctrl+A/E 行首尾，Ctrl+U/K 删到行首/行尾，Ctrl+H / Ctrl+D 删前一字（Ctrl+D 空则退出）
-- 模型在跑时 editor 仍可输入；Enter 排队等本轮结束再发；Esc / 空输入时 Ctrl+C 打断（AbortSignal 贯穿 fetch 与 bash）
-- 退出：Ctrl+C 有字先清空，空且空闲才退出；Ctrl+D 空退出；`/exit` 退出
+- editor：Ctrl+A/E 行首尾，Ctrl+U/K 删到行首/行尾，Ctrl+H 删前一字，Delete 删后一字；插入走 `isCharKey`（按码点，emoji 能进）。没有 Ctrl+D
+- 模型在跑时 editor 仍可输入；Enter 排队等本轮结束再发；半截 CSI 后续字节重设 40ms，超时丢掉
+- 退出和打断只走 Ctrl+C：有字清空，向导取消，busy 打断，空闲退出；Esc 向导取消或 busy 打断；`/exit` 退出
 - 重绘：行级 diff + CSI 2026，不再每帧 `\x1b[H\x1b[J`
 - transcript：用户 `❯`、工具 `→` 缩进、结果再缩进、token 单独一行
 
@@ -82,7 +82,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 - **零运行时依赖**：只用 Node 标准库；devDependency 也不引入（测试用内置 mock）
 - **体积**：包 <100KB；冷启动 <300ms
 - **兼容**：Node ≥22.18（type-stripping 免构建的最低版本；与 dsh 的 ^22.19/>=24 同代际）
-- **安全**：默认权限确认（F3）；apiKey 只读 `~/.ti/settings.json`（文档建议 chmod 600）；bash 无沙箱（文档明示风险，同 pi）
+- **安全**：工具直接执行，没有权限确认；apiKey 只写 `~/.ti/settings.json`（文件 `0o600`，目录 `0o700`）；bash 无沙箱（文档明示风险，同 pi）
 - **可维护**：`src/` 模块化拆分（按层分文件、单职责，详见 DESIGN.md §2；不设行数硬指标，职责清晰为准）；免构建直发（type-stripping），bin 入口固定 `src/main.ts`
 
 ## 6. 技术方案
@@ -91,15 +91,15 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 
 ```
 配置层  ~/.ti/settings.json + CLI              （现状，不采用环境变量的值）
-交互层  REPL + 单发    → 加：中断处理、历史持久化、权限提问、/compact /cost
-循环层  agentTurn      → 加：AbortSignal 贯穿、beforeToolCall 权限钩子、session 追加写
+交互层  REPL           → 加：中断处理、历史持久化、/compact /cost
+循环层  agentTurn      → 加：AbortSignal 贯穿、session 追加写
 传输层  callLLM 双协议 → 加：fetch(signal)、usage 累计
 工具层  runTool 4 工具 → 加：bash 接 AbortSignal（kill 进程）
 ```
 
 - **session 格式（JSONL，线性）**：首行 `{"type":"meta","version":1,"cwd","provider","model","createdAt"}`，之后每行一条 `{"type":"message","role","content"}`；恢复时读文件重建 `messages[]`
-- **中断**：`AbortController` 每 turn 一个；readline `SIGINT` 事件触发 abort（而非默认杀进程）；bash 监听 signal → `child.kill()`
-- **权限**：循环层加 `beforeToolCall(name, input) → allow | always | deny` 钩子（对齐 pi 的钩子位）；默认 auto 直通，ask 模式才触发终端提问；`always` 记入内存集合
+- **中断**：每轮聊天一个 `AbortController`，经 `ctx.signal` 贯穿 fetch 与 bash；TUI 空 Ctrl+C 或 Esc 在 busy 时 `abort()`；`finishInterrupted` 收尾
+- **权限**：工具直接执行，没有权限确认。不设确认钩子，也不弹 ask
 - **/compact**：messages 另发一次非流式请求求摘要 → `messages = [{role:"user", content: 摘要+接续指令}]`
 - **skills（F9）**：`buildSystemPrompt()` 时扫描 `~/.ti/skills/` 与 `.ti/skills/`，frontmatter 手写解析 name/description 两行（不引 yaml 库），清单注入系统提示词
 - **/provider（F10）**：复用 `resolveProvider()`，REPL 内列出/切换 provider；`/model` 收敛为只管模型名
@@ -142,7 +142,7 @@ scripts/smoke.mjs   # mock 冒烟测试（F8）
 |---|---|---|
 | v0.1 ✅ | 核心 loop + 4 工具 + 双协议 + 配置（现状） | 已完成并验证 |
 | v0.2 | R0 拆分重构（单文件 → src/ 模块化，行为不变）+ F1 session + F2 中断 | 冒烟回归通过；杀进程可恢复；长任务可中断 |
-| v0.3 | F3 权限（默认 auto）+ F4 compact + F5 历史 + F6 token 累计 | 验收标准全过 |
+| v0.3 | F4 compact + F5 历史 + F6 token 累计 | 验收标准全过 |
 | v0.4 | F9 skills + F10 /provider | 验收标准全过 |
 | v1.0 | F7 打包就绪 + F8 冒烟测试 + 英文 README + 打磨 | `npm pack` 自测通过、`npm test` 全绿；**不发布** |
 | 发布决策点 | 用户确认后：仓库转公开 + `npm publish --access public` | 包可全局安装使用 |
