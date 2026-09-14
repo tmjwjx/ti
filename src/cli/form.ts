@@ -1,5 +1,5 @@
 // 全屏选项和单行输入
-import { parseKey } from "./keys.ts";
+import { createKeyAssembler, isCharKey, parseKey } from "./keys.ts";
 import { bold, cyan, dim } from "./render.ts";
 
 // 表单被强制中断
@@ -28,8 +28,9 @@ function readKeys(onKey: (key: string) => boolean): Promise<void> {
   stdin.resume();
   stdin.setEncoding("utf8");
   return new Promise((resolve, reject) => {
-    let esc = "";
-    let escTimer: ReturnType<typeof setTimeout> | undefined;
+    const keys = createKeyAssembler((raw) => {
+      if (onKey(raw)) finish();
+    });
     const onData = (chunk: string) => {
       for (const ch of chunk) {
         if (ch === "\x03") {
@@ -37,32 +38,12 @@ function readKeys(onKey: (key: string) => boolean): Promise<void> {
           reject(new FormAbort());
           return;
         }
-        if (esc) {
-          if (escTimer) clearTimeout(escTimer);
-          esc += ch;
-          // CSI 或 SS3 以字母或 ~ 收尾，这时才交给 onKey
-          if (/[A-Za-z~]/.test(ch)) {
-            const key = esc;
-            esc = "";
-            if (onKey(key)) finish();
-          }
-          continue;
-        }
-        if (ch === "\x1b") {
-          esc = ch;
-          // 40ms 内没有后续就当单独 Esc
-          escTimer = setTimeout(() => {
-            esc = "";
-            if (onKey("\x1b")) finish();
-          }, 40);
-          continue;
-        }
-        if (onKey(ch)) finish();
+        keys.push(ch);
       }
     };
     // 摘掉监听；若进来前不是 raw，恢复，避免把后续 TUI 搞乱
     const cleanup = () => {
-      if (escTimer) clearTimeout(escTimer);
+      keys.reset();
       stdin.off("data", onData);
       if (!wasRaw) stdin.setRawMode?.(false);
       writeRaw("\x1b[?25h");
@@ -198,7 +179,7 @@ export async function input(title: string, opts?: { secret?: boolean; placeholde
       draw();
       return false;
     }
-    if (key === "backspace" || key === "ctrl+h" || key === "ctrl+d") {
+    if (key === "backspace" || key === "ctrl+h") {
       if (cursor === 0) return false;
       const cs = chars();
       cs.splice(cursor - 1, 1);
@@ -207,7 +188,7 @@ export async function input(title: string, opts?: { secret?: boolean; placeholde
       draw();
       return false;
     }
-    if (key.length === 1 && key >= " ") {
+    if (isCharKey(key)) {
       const cs = chars();
       cs.splice(cursor, 0, key);
       value = cs.join("");

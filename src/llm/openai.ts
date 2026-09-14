@@ -28,21 +28,27 @@ function toWire(systemPrompt: string, messages: Message[]): any[] {
 // 流碎片收成内部 assistant 消息
 function toInternalAssistant(
   text: string,
-  calls: Record<number, { id: string; name: string; args: string }>,
-  stopReason: StopReason,
+  calls: Record<number, { id?: string; name: string; args: string }>,
+  stopReason: StopReason | undefined,
   usage: { input: number; output: number },
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
   if (text) content.push({ type: "text", text });
+  let argsOk = true;
   for (const c of Object.values(calls)) {
+    // 没收到线上 id 就不进列表，避免空 id 回放 400
+    if (!c.id) continue;
     let args: Record<string, any> = {};
     try {
       args = JSON.parse(c.args || "{}");
     } catch {
-      args = {};
+      argsOk = false;
     }
     content.push({ type: "toolCall", id: c.id, name: c.name, arguments: args });
   }
+  // 没收到线上结束原因就不是说完；说完或要调工具但 JSON 解不开也不能跑
+  if (stopReason === undefined) stopReason = "incomplete";
+  else if ((stopReason === "toolUse" || stopReason === "stop") && !argsOk) stopReason = "badArgs";
   return { role: "assistant", content, stopReason, usage };
 }
 
@@ -56,8 +62,8 @@ export async function callOpenAI(
   signal?: AbortSignal,
 ): Promise<AssistantMessage> {
   let text = "";
-  const calls: Record<number, { id: string; name: string; args: string }> = {};
-  let stopReason: StopReason = "stop";
+  const calls: Record<number, { id?: string; name: string; args: string }> = {};
+  let stopReason: StopReason | undefined;
   const usage = { input: 0, output: 0 };
   try {
     const res = await fetch(`${provider.baseURL}/chat/completions`, {
@@ -89,7 +95,7 @@ export async function callOpenAI(
       }
       for (const tc of delta.tool_calls ?? []) {
         // 同一 index 的碎片拼 arguments；??= 只在第一次见到这个下标时建槽
-        const c = (calls[tc.index] ??= { id: "", name: "", args: "" });
+        const c = (calls[tc.index] ??= { name: "", args: "" });
         if (tc.id) c.id = tc.id;
         if (tc.function?.name) c.name = tc.function.name;
         if (tc.function?.arguments) c.args += tc.function.arguments;
@@ -100,9 +106,9 @@ export async function callOpenAI(
     }
     return toInternalAssistant(text, calls, stopReason, usage);
   } catch (e) {
-    // 有半截就当正常返回，让历史能接；完全没数据再抛，agent 只打 [interrupted]
+    // 有半截就返回，让历史能接；完全没数据再抛，agent 走中断收尾
     if (e instanceof Error && e.name === "AbortError") {
-      if (text || Object.keys(calls).length) return toInternalAssistant(text, calls, stopReason, usage);
+      if (text || Object.values(calls).some((c) => c.id)) return toInternalAssistant(text, calls, stopReason, usage);
     }
     throw e;
   }

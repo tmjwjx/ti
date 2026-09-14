@@ -1,16 +1,37 @@
 // Anthropic Messages API（stream）
-// 发出：连续 toolResult 归并成一条 user（协议要求结果挂在 user 下）
+// 发出：连续 toolResult 归并成 user；相邻 user 合成一条
 // 收回：按 content_block 下标累积，stop_reason 收成 StopReason
 import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
+
+// 线上 user 内容收成块数组
+function asUserBlocks(content: any): any[] {
+  return typeof content === "string" ? [{ type: "text", text: content }] : content;
+}
+
+// 两段 user 内容合成一段
+function mergeUserContent(a: any, b: any): any {
+  if (typeof a === "string" && typeof b === "string") return a + "\n\n" + b;
+  return [...asUserBlocks(a), ...asUserBlocks(b)];
+}
+
+// 把一条 user 接到线上消息末尾，相邻的合成一条以免角色不能交替
+function pushUser(out: any[], content: any): void {
+  const last = out[out.length - 1];
+  if (last?.role === "user") {
+    last.content = mergeUserContent(last.content, content);
+    return;
+  }
+  out.push({ role: "user", content });
+}
 
 // 内部消息收成 Anthropic 线格式
 function toWire(messages: Message[]): any[] {
   const out: any[] = [];
   let results: any[] = [];
-  const flush = () => {
+  const flushResults = () => {
     if (results.length) {
-      out.push({ role: "user", content: results });
+      pushUser(out, results);
       results = [];
     }
   };
@@ -18,41 +39,55 @@ function toWire(messages: Message[]): any[] {
     if (m.role === "toolResult") {
       results.push({ type: "tool_result", tool_use_id: m.toolCallId, content: m.content, is_error: m.isError });
     } else if (m.role === "user") {
-      flush();
-      out.push({ role: "user", content: m.content });
+      flushResults();
+      pushUser(out, m.content);
     } else {
-      flush();
+      flushResults();
       out.push({
         role: "assistant",
         content: m.content.map((b) => (b.type === "text" ? b : { type: "tool_use", id: b.id, name: b.name, input: b.arguments })),
       });
     }
   }
-  flush();
+  flushResults();
   return out;
 }
 
-// 线上 stop_reason 收成内部 StopReason
-function mapStop(reason: string | undefined, prev: StopReason): StopReason {
-  switch (reason) {
-    case "end_turn":
-      return "stop";
-    case "max_tokens":
-      return "length";
-    case "tool_use":
-      return "toolUse";
-    default:
-      // 空 delta 不要把已有状态冲掉
-      return prev;
-  }
+// 线上 stop_reason 收成内部 StopReason。空的保持原值，避免把已有结束冲掉
+function mapStop(reason: string | undefined, prev: StopReason | undefined): StopReason | undefined {
+  if (!reason) return prev;
+  if (reason === "max_tokens") return "length";
+  if (reason === "tool_use") return "toolUse";
+  return "stop";
 }
 
 // 流碎片收成内部 assistant 消息
 function toInternalAssistant(
   content: (TextContent | ToolCall)[],
-  stopReason: StopReason,
+  jsonBuf: string[],
+  hasStartInput: boolean[],
+  stopReason: StopReason | undefined,
   usage: { input: number; output: number },
 ): AssistantMessage {
+  let argsOk = true;
+  for (let i = 0; i < content.length; i++) {
+    const b = content[i];
+    if (b?.type !== "toolCall") continue;
+    const raw = jsonBuf[i];
+    if (raw) {
+      try {
+        b.arguments = JSON.parse(raw);
+      } catch {
+        argsOk = false;
+      }
+    } else if (!hasStartInput[i]) {
+      // 开场没带 input，后面也没 json 碎片：不能当成合法空对象去跑
+      argsOk = false;
+    }
+  }
+  // 没收到线上结束原因就不是说完；说完或要调工具但 JSON 解不开也不能跑
+  if (stopReason === undefined) stopReason = "incomplete";
+  else if ((stopReason === "toolUse" || stopReason === "stop") && !argsOk) stopReason = "badArgs";
   return { role: "assistant", content: content.filter(Boolean), stopReason, usage };
 }
 
@@ -68,7 +103,8 @@ export async function callAnthropic(
   // 按下标放块；未处理的类型会留下空洞，最后 filter(Boolean) 丢掉
   const content: (TextContent | ToolCall)[] = [];
   const jsonBuf: string[] = [];
-  let stopReason: StopReason = "stop";
+  const hasStartInput: boolean[] = [];
+  let stopReason: StopReason | undefined;
   const usage = { input: 0, output: 0 };
   try {
     const res = await fetch(`${provider.baseURL}/v1/messages`, {
@@ -93,8 +129,10 @@ export async function callAnthropic(
         if (ev.content_block.type === "text") content[ev.index] = { type: "text", text: "" };
         else if (ev.content_block.type === "tool_use") {
           // 有的端点在 start 就带完整 input，后面没有 json delta
-          content[ev.index] = { type: "toolCall", id: ev.content_block.id, name: ev.content_block.name, arguments: ev.content_block.input ?? {} };
+          const start = ev.content_block.input;
+          content[ev.index] = { type: "toolCall", id: ev.content_block.id, name: ev.content_block.name, arguments: start ?? {} };
           jsonBuf[ev.index] = "";
+          hasStartInput[ev.index] = start !== undefined && start !== null;
         }
         break;
       case "content_block_delta":
@@ -108,17 +146,6 @@ export async function callAnthropic(
           jsonBuf[ev.index] += ev.delta.partial_json;
         }
         break;
-      case "content_block_stop": {
-        const b = content[ev.index];
-        if (b?.type === "toolCall" && jsonBuf[ev.index]) {
-          try {
-            b.arguments = JSON.parse(jsonBuf[ev.index]);
-          } catch {
-            b.arguments = {};
-          }
-        }
-        break;
-      }
       case "message_delta":
         stopReason = mapStop(ev.delta?.stop_reason, stopReason);
         usage.output = ev.usage?.output_tokens ?? usage.output;
@@ -127,11 +154,11 @@ export async function callAnthropic(
         throw new Error(`API stream error: ${ev.error?.message ?? JSON.stringify(ev)}`);
       }
     }
-    return toInternalAssistant(content, stopReason, usage);
+    return toInternalAssistant(content, jsonBuf, hasStartInput, stopReason, usage);
   } catch (e) {
     // 同 openai：有半截就返回，空的再抛 AbortError
     if (e instanceof Error && e.name === "AbortError") {
-      if (content.filter(Boolean).length) return toInternalAssistant(content, stopReason, usage);
+      if (content.filter(Boolean).length) return toInternalAssistant(content, jsonBuf, hasStartInput, stopReason, usage);
     }
     throw e;
   }

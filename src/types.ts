@@ -15,8 +15,9 @@ export type TextContent = { type: "text"; text: string };
 // arguments 是 parse 后的对象，不是线上的 JSON 字符串
 export type ToolCall = { type: "toolCall"; id: string; name: string; arguments: Record<string, any> };
 
-// stop 正常结束，length 输出被截断，toolUse 要调工具
-export type StopReason = "stop" | "length" | "toolUse";
+// stop 正常结束，length 输出触达上限，toolUse 要调工具
+// incomplete 流未给出结束原因，badArgs 有正式 tool 结束但参数解不开
+export type StopReason = "stop" | "length" | "toolUse" | "incomplete" | "badArgs";
 
 export type UserMessage = { role: "user"; content: string | TextContent[] };
 export type AssistantMessage = {

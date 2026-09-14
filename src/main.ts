@@ -26,20 +26,26 @@ function isTty(): boolean {
   return !!(process.stdin.isTTY && process.stdout.isTTY);
 }
 
+// 解开 TUI 再结束进程
+function quit(tui: Tui | undefined, code: number): never {
+  tui?.close();
+  process.exit(code);
+}
+
 // 缺配置时走指引
 async function maybeSetup(force: boolean, tui?: Tui): Promise<void> {
   const name = settings.provider;
   if (!force && isProviderReady(name)) return;
   if (!isTty()) {
     console.error("error: no usable config — run ti in a terminal");
-    process.exit(1);
+    quit(tui, 1);
   }
   try {
     const r = await runSetup(tui);
     // `ti setup` 取消且本来就能用：正常退出。冷启动取消：失败
-    if (r !== "saved") process.exit(force && isProviderReady(settings.provider) ? 0 : 1);
+    if (r !== "saved") quit(tui, force && isProviderReady(settings.provider) ? 0 : 1);
   } catch (e) {
-    if (e instanceof FormAbort) process.exit(1);
+    if (e instanceof FormAbort) quit(tui, 1);
     throw e;
   }
 }
@@ -66,13 +72,11 @@ async function main() {
   try {
     await maybeSetup(forceSetup, tui);
 
-    // --provider 若还没配 key，不能用，退回 settings 里当前那家
-    const name = cliProvider && isProviderReady(cliProvider) ? cliProvider : settings.provider;
     try {
-      setProvider(resolveProvider(name, cliModel));
+      setProvider(resolveProvider(cliProvider ?? settings.provider, cliModel));
     } catch (e) {
       console.error(`error: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(1);
+      quit(tui, 1);
     }
 
     const systemPrompt = await buildSystemPrompt();
@@ -85,8 +89,8 @@ async function main() {
   } finally {
     tui?.close();
   }
-  // raw 模式退出后，显式 exit，避免 stdin 还 resume 着把进程挂住
-  if (tui) process.exit(0);
+  // raw 模式退出后显式 exit，避免 stdin 还 resume 着把进程挂住
+  if (tui) quit(tui, 0);
 }
 
 await main();

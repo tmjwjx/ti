@@ -33,14 +33,14 @@ export const TOOLS = [
   {
     name: "edit",
     description:
-      "Make one or more targeted replacements in a file. Each oldText must match the file content exactly (including whitespace) and occur exactly once. All edits are matched against the original file.",
+      "Make one or more targeted replacements in a file. Each oldText must match the original file exactly (including whitespace) and occur exactly once. All edits locate against the original text and must not overlap.",
     input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "Path to the file to edit (relative or absolute)" },
         edits: {
           type: "array",
-          description: "Targeted replacements matched against the original file. Merge nearby changes into one edit; do not overlap.",
+          description: "Targeted replacements. Each oldText must be unique in the original file. All edits locate against the original and must not overlap.",
           items: {
             type: "object",
             properties: {

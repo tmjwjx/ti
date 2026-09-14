@@ -1,5 +1,5 @@
 // 主屏：对话视口、底栏编辑、footer
-import { parseKey } from "./keys.ts";
+import { createKeyAssembler, isCharKey, parseKey } from "./keys.ts";
 import { bold, cyan, dim } from "./render.ts";
 
 export type SlashCommand = { name: string; hint: string; label?: string; current?: boolean };
@@ -236,8 +236,6 @@ export function openTui(): Tui {
   let prevFrame: string[] | null = null;
   let prevSize = { rows: 0, cols: 0 };
   let keysOn = false;
-  let esc = "";
-  let escTimer: ReturnType<typeof setTimeout> | undefined;
   const inbox: string[] = [];
   const waiters: ((s: string | null) => void)[] = [];
 
@@ -803,14 +801,7 @@ export function openTui(): Tui {
       paint();
       return;
     }
-    if (key === "ctrl+d") {
-      if (!input) {
-        if (wizard) return;
-        close();
-        return;
-      }
-    }
-    if (key === "backspace" || key === "ctrl+d") {
+    if (key === "backspace") {
       if (cursor === 0) return;
       const cs = chars();
       cs.splice(cursor - 1, 1);
@@ -821,35 +812,15 @@ export function openTui(): Tui {
       paint();
       return;
     }
-    if (key.length === 1 && key >= " ") {
+    if (isCharKey(key)) {
       insert(key);
       paint();
     }
   };
 
-  // 拼 CSI：以 ESC 开头、以字母或 ~ 结束。40ms 内没有后续就当单独 Esc
+  const keys = createKeyAssembler(onKey);
   const onData = (chunk: string) => {
-    for (const ch of chunk) {
-      if (esc) {
-        if (escTimer) clearTimeout(escTimer);
-        esc += ch;
-        if (/[A-Za-z~]/.test(ch)) {
-          const key = esc;
-          esc = "";
-          onKey(key);
-        }
-        continue;
-      }
-      if (ch === "\x1b") {
-        esc = ch;
-        escTimer = setTimeout(() => {
-          esc = "";
-          onKey("\x1b");
-        }, 40);
-        continue;
-      }
-      onKey(ch);
-    }
+    for (const ch of chunk) keys.push(ch);
   };
 
   // 挂上 stdin。pause 或 close 会摘掉，resume 再挂，避免和 form 抢键
@@ -864,8 +835,7 @@ export function openTui(): Tui {
     if (!keysOn) return;
     keysOn = false;
     stdin.off("data", onData);
-    if (escTimer) clearTimeout(escTimer);
-    esc = "";
+    keys.reset();
   }
 
   attachKeys();

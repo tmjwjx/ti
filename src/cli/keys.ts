@@ -1,5 +1,5 @@
-// 终端按键：一段原始字节 → 规范名（`up` `ctrl+c` `shift+enter`）
-// 只解码，不解释含义。`ctrl+a` 是不是行首，由编辑器认
+// 终端按键：先拼齐转义，再收成规范名（`up` `ctrl+c` `shift+enter`）
+// 不解释含义。`ctrl+a` 是不是行首，由编辑器认
 const SHIFT = 1;
 const ALT = 2;
 const CTRL = 4;
@@ -137,4 +137,79 @@ export function parseKey(data: string): string {
   }
 
   return data;
+}
+
+// 是不是该写进输入框的一个码点
+export function isCharKey(key: string): boolean {
+  const cp = [...key];
+  // 按码点计，不用 UTF-16 length。命名键也满足 >= " "，必须同时是单码点
+  return cp.length === 1 && cp[0]! >= " ";
+}
+
+const ESC_WAIT_MS = 40;
+
+// 一段转义是否已经收齐
+function sequenceReady(seq: string): boolean {
+  if (seq.length < 2) return false;
+  const intro = seq[1];
+  // CSI：ESC [ … 以 @ 到 ~ 收尾
+  if (intro === "[") {
+    if (seq.length < 3) return false;
+    const last = seq.charCodeAt(seq.length - 1);
+    return last >= 0x40 && last <= 0x7e;
+  }
+  // SS3：ESC O 再一字节
+  if (intro === "O") return seq.length >= 3;
+  return true;
+}
+
+// 把 stdin 字节收成完整按键序列，半截超时丢掉、不重放
+export function createKeyAssembler(emit: (seq: string) => void) {
+  let buf = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearTimer = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+
+  const arm = (fn: () => void) => {
+    clearTimer();
+    timer = setTimeout(() => {
+      timer = undefined;
+      fn();
+    }, ESC_WAIT_MS);
+  };
+
+  return {
+    push(ch: string) {
+      if (!buf) {
+        if (ch === "\x1b") {
+          buf = ch;
+          arm(() => {
+            buf = "";
+            emit("\x1b");
+          });
+          return;
+        }
+        emit(ch);
+        return;
+      }
+      buf += ch;
+      if (sequenceReady(buf)) {
+        clearTimer();
+        const seq = buf;
+        buf = "";
+        emit(seq);
+        return;
+      }
+      arm(() => {
+        buf = "";
+      });
+    },
+    reset() {
+      clearTimer();
+      buf = "";
+    },
+  };
 }

@@ -1,7 +1,7 @@
 // 内置目录 + ~/.ti/settings.json + 当前 provider
 // 字段优先级：CLI > 文件里写了的 > 代码目录
 // 不读环境变量的值
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import type { Protocol, ProviderConf } from "../types.ts";
@@ -53,10 +53,23 @@ export function loadSettings(): any {
 
 export let settings = loadSettings();
 
+// 改权限，失败就忽略
+function chmodQuiet(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // EPERM 或只读盘：留下现状，不要崩界面
+  }
+}
+
 // 整份 settings 落盘
 export function saveSettings(): void {
-  mkdirSync(dirname(SETTINGS_PATH), { recursive: true });
-  writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  const dir = dirname(SETTINGS_PATH);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  // 新建时 mode 可能被 umask 放宽；已有 0644 也要收紧
+  chmodQuiet(dir, 0o700);
+  chmodQuiet(SETTINGS_PATH, 0o600);
 }
 
 // 从磁盘再读 settings

@@ -250,6 +250,7 @@ async function dispatch(
   }
   if (!line) return "cont";
   messages.push({ role: "user", content: line });
+  const afterUser = messages.length;
   // 用差值算「这一轮」token，footer 的 turn 才不会被历史冲掉
   const before = tokenTotals(messages);
   try {
@@ -260,8 +261,8 @@ async function dispatch(
     if (din || dout) lastTurn = { input: din, output: dout };
     say("");
   } catch (e) {
-    // 请求失败这条 user 没被模型看见，拿掉以免脏历史。abort 不会到这里
-    messages.pop();
+    // 还没写出 assistant 才拿掉这条 user。已经写下的轮次原样留（toolResult 齐全）。abort 不会到这里
+    if (messages.length === afterUser) messages.pop();
     say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
   }
   return "cont";
