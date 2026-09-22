@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话落盘的实现</title>
+<style>
+  :root {
+    --bg: #f4f2ed;
+    --card: #fffefb;
+    --ink: #1c1a17;
+    --body: #413d37;
+    --muted: #7b756c;
+    --rule: #dcd7cc;
+    --rule-firm: #b9b2a4;
+    --seal: #7d3a2e;
+    --seal-wash: #f4e7e3;
+    --mint: #2f6b52;
+    --mint-wash: #e6f0ea;
+    --amber: #8a6410;
+    --amber-wash: #f8efd8;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+    --serif: "Songti SC", "STSong", "Noto Serif SC", serif;
+    --mono: "SF Mono", Menlo, ui-monospace, monospace;
+    --shell: 44rem;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--body);
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.75;
+  }
+  .reading {
+    position: fixed;
+    z-index: 30;
+    top: 0; left: 0;
+    height: 2px; width: 0;
+    background: var(--seal);
+  }
+  a { color: inherit; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    padding: 0.05em 0.3em;
+    background: #efece4;
+    border-radius: 2px;
+  }
+  .shell { max-width: var(--shell); margin: 0 auto; padding: 0 1.35rem; }
+
+  .masthead { padding: 3rem 0 1.6rem; }
+  .tagline { margin: 0 0 0.6rem; color: var(--seal); font-size: 0.74rem; letter-spacing: 0.18em; }
+  h1 {
+    margin: 0;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: clamp(1.9rem, 4.6vw, 2.6rem);
+    font-weight: 600;
+    line-height: 1.24;
+  }
+  .abstract {
+    margin: 1.1rem 0 0;
+    padding: 0.85rem 1rem;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--seal);
+  }
+  .abstract p { margin: 0; color: var(--ink); }
+
+  .toc {
+    position: sticky;
+    z-index: 20;
+    top: 0;
+    margin-top: 1.6rem;
+    background: var(--bg);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .toc ol {
+    display: flex;
+    gap: 0.15rem;
+    margin: 0;
+    padding: 0.45rem 0;
+    list-style: none;
+    overflow-x: auto;
+  }
+  .toc a {
+    display: flex;
+    gap: 0.35rem;
+    padding: 0.2rem 0.6rem;
+    color: var(--muted);
+    font-size: 0.86rem;
+    text-decoration: none;
+    white-space: nowrap;
+    border-radius: 2px;
+  }
+  .toc a .no { color: var(--rule-firm); font-variant-numeric: tabular-nums; }
+  .toc a.on { background: var(--ink); color: var(--card); }
+  .toc a.on .no { color: #b6ada0; }
+
+  .phase {
+    position: relative;
+    padding: 2rem 0 0.4rem 3.4rem;
+    scroll-margin-top: 3.2rem;
+  }
+  .phase::before {
+    content: "";
+    position: absolute;
+    left: 0.92rem;
+    top: 3.4rem;
+    bottom: -0.6rem;
+    width: 1px;
+    background: var(--rule-firm);
+  }
+  .phase:last-of-type::before { display: none; }
+  .phase > .dot {
+    position: absolute;
+    left: 0;
+    top: 2.15rem;
+    width: 1.85rem;
+    height: 1.85rem;
+    display: grid;
+    place-items: center;
+    background: var(--card);
+    border: 1px solid var(--rule-firm);
+    border-radius: 50%;
+    color: var(--seal);
+    font-family: var(--serif);
+    font-size: 0.95rem;
+  }
+  .phase h2 {
+    margin: 0 0 0.25rem;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 1.32rem;
+    font-weight: 600;
+  }
+  .phase h2 a { color: var(--rule-firm); font-family: var(--sans); font-size: 0.8rem; text-decoration: none; }
+  .trigger {
+    margin: 0 0 0.9rem;
+    color: var(--muted);
+    font-size: 0.88rem;
+  }
+  .trigger b { color: var(--body); font-weight: 600; }
+  .phase p { margin: 0.7rem 0; }
+
+  .flow {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: stretch;
+    gap: 0.3rem;
+    margin: 1rem 0;
+  }
+  .flow figure {
+    margin: 0;
+    padding: 0.7rem 0.75rem 0.8rem;
+    background: var(--card);
+    border: 1px solid var(--rule);
+  }
+  .flow figure.tinted { background: var(--mint-wash); border-color: #c7dccf; }
+  .flow figcaption { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.1em; }
+  .flow b { display: block; margin-top: 0.15rem; color: var(--ink); font-size: 1rem; }
+  .flow small { display: block; margin-top: 0.3rem; color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
+  .flow .arrow { align-self: center; color: var(--rule-firm); font-size: 1.1rem; }
+
+  .sub {
+    margin: 1.5rem 0 0;
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 1.05rem;
+    font-weight: 600;
+  }
+  .jsonl { margin: 0.85rem 0 1rem; background: var(--card); border: 1px solid var(--rule); }
+  .jsonl header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid var(--rule);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+  }
+  .jl {
+    display: grid;
+    grid-template-columns: 1.3rem 5.2rem 1fr;
+    gap: 0.5rem;
+    align-items: baseline;
+    padding: 0.42rem 0.75rem;
+    border-bottom: 1px solid #eeeae1;
+    font-size: 0.88rem;
+  }
+  .jl:last-child { border-bottom: 0; }
+  .jl.dim { background: #faf8f3; color: var(--muted); }
+  .jl i { color: var(--rule-firm); font-style: normal; font-variant-numeric: tabular-nums; }
+  .jl b {
+    padding: 0.02em 0.35em;
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    text-align: center;
+  }
+  .raw { margin: 0.85rem 0 1rem; background: var(--card); border: 1px solid var(--rule); }
+  .raw header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid var(--rule);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+  }
+  .raw pre { margin: 0; padding: 0.7rem 0.75rem; overflow-x: auto; }
+  .raw code {
+    display: block;
+    padding: 0;
+    background: none;
+    color: var(--ink);
+    font-size: 0.78rem;
+    line-height: 1.85;
+    white-space: pre;
+  }
+  .k-meta { background: var(--seal-wash); color: var(--seal); }
+  .k-msg { background: var(--mint-wash); color: var(--mint); }
+  .k-cut { background: #ece8df; color: var(--muted); }
+  .facts {
+    display: grid;
+    grid-template-columns: 5.6rem 1fr;
+    margin: 1rem 0;
+    background: var(--card);
+    border: 1px solid var(--rule);
+  }
+  .facts dt {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--rule);
+    color: var(--seal);
+    font-family: var(--mono);
+    font-size: 0.8rem;
+  }
+  .facts dd {
+    margin: 0;
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--rule);
+    border-left: 1px solid var(--rule);
+    font-size: 0.92rem;
+  }
+  .facts dt:last-of-type, .facts dd:last-of-type { border-bottom: 0; }
+
+  .grid { overflow-x: auto; margin: 1rem 0; background: var(--card); border: 1px solid var(--rule); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  caption {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.78rem;
+    text-align: left;
+  }
+  th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-size: 0.74rem; font-weight: 600; letter-spacing: 0.04em; }
+  td:first-child { color: var(--ink); }
+  tbody tr:nth-child(even) { background: #faf8f3; }
+
+  .aside {
+    margin: 1rem 0;
+    padding: 0.7rem 0.9rem;
+    background: var(--amber-wash);
+    border-left: 3px solid var(--amber);
+  }
+  .aside b { display: block; color: var(--amber); font-size: 0.74rem; letter-spacing: 0.08em; }
+  .aside p { margin: 0.1rem 0 0; }
+
+  .verify { margin: 1rem 0 0; padding: 0; list-style: none; }
+  .verify li {
+    display: grid;
+    grid-template-columns: 1.1rem 1fr;
+    gap: 0.6rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.92rem;
+  }
+  .verify input { margin-top: 0.5rem; accent-color: var(--mint); }
+
+  .anchors {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+    margin: 1rem 0 0;
+  }
+  .anchors div { padding: 0.6rem 0.7rem; background: var(--card); border: 1px solid var(--rule); }
+  .anchors b { display: block; color: var(--ink); font-family: var(--mono); font-size: 0.8rem; }
+  .anchors span { color: var(--muted); font-size: 0.82rem; }
+
+  footer.end {
+    margin-top: 2.4rem;
+    padding: 1.1rem 0 3rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.84rem;
+  }
+  footer.end a { color: var(--seal); text-decoration: none; }
+  @media (max-width: 720px) {
+    .phase { padding-left: 2.6rem; }
+    .phase::before { left: 0.7rem; }
+    .phase > .dot { width: 1.45rem; height: 1.45rem; font-size: 0.82rem; }
+    .flow { grid-template-columns: 1fr; }
+    .flow .arrow { transform: rotate(90deg); }
+    .anchors { grid-template-columns: 1fr; }
+    .facts { grid-template-columns: 4.6rem 1fr; }
+    .jl { grid-template-columns: 1.1rem 4.6rem 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="reading" id="reading"></div>
+
+<div class="shell">
+  <header class="masthead">
+    <p class="tagline">实现说明 · 会话落盘</p>
+    <h1>一句话，怎么从屏幕走到当前目录的一份文件里</h1>
+    <div class="abstract">
+      <p>对话状态先改，文件再在末尾追加一行。磁盘出问题不打断这一轮回答，等回答结束才提示一次。</p>
+    </div>
+  </header>
+</div>
+
+<nav class="toc" aria-label="目录">
+  <div class="shell">
+    <ol>
+      <li><a href="#p1"><span class="no">01</span>建档</a></li>
+      <li><a href="#p2"><span class="no">02</span>追加</a></li>
+      <li><a href="#p3"><span class="no">03</span>撤回</a></li>
+      <li><a href="#p4"><span class="no">04</span>恢复</a></li>
+      <li><a href="#p5"><span class="no">05</span>改名与互斥</a></li>
+      <li><a href="#p6"><span class="no">06</span>怎么验</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main class="shell">
+  <section class="phase" id="p1">
+    <div class="dot">壹</div>
+    <h2>建档 <a href="#p1">#</a></h2>
+    <p class="trigger"><b>谁触发：</b>你输入的第一句普通的话。斜杠命令不触发。</p>
+    <p>这句话先进入内存里的对话，然后才看有没有文件。<code>session.ts</code> 里的 <code>writer</code> 为空，说明还没有——刚启动，或者刚执行过 <code>/clear</code>。这时 <code>createSession</code> 才动手：建目录、独占创建文件、写上锁、写第一行封面。所以只打一个 <code>/help</code> 就退出，磁盘上不会留下任何东西。</p>
+    <div class="flow">
+      <figure>
+        <figcaption>你</figcaption>
+        <b>说一句</b>
+        <small>入口 <code>dispatch</code></small>
+      </figure>
+      <div class="arrow">→</div>
+      <figure class="tinted">
+        <figcaption>对话</figcaption>
+        <b>先多一句</b>
+        <small>磁盘失败也不撤</small>
+      </figure>
+      <div class="arrow">→</div>
+      <figure>
+        <figcaption>文件</figcaption>
+        <b>封面 + 这句</b>
+        <small>封面失败就删掉空文件</small>
+      </figure>
+    </div>
+    <p>文件名取这句话的第一行：去掉控制字符和头尾的点，不能进文件名的符号收成横线，最长 40 个字，后面加下划线和 4 位十六进制。撞上了就重抽，最多 8 次。</p>
+
+    <h3 class="sub">这份文件长什么样</h3>
+    <p>它不是一份完整的 JSON，而是一行一条记录，永远只往末尾加，不回头改。一句对话对应一行，所以追加一句只是多写一行；读的时候一行一行解析，某一行坏了只丢这一行，其余照常读出来。</p>
+    <div class="jsonl">
+      <header><span>帮我改个登录bug_3f9a.jsonl</span><span>一行一条</span></header>
+      <div class="jl"><i>1</i><b class="k-meta">meta</b><span>建档时写的封面：目录、厂家、模型、这份的显示名</span></div>
+      <div class="jl"><i>2</i><b class="k-msg">message</b><span>你说的「帮我改个登录 bug」</span></div>
+      <div class="jl"><i>3</i><b class="k-msg">message</b><span>模型回复，里面可能带一次工具调用</span></div>
+      <div class="jl"><i>4</i><b class="k-msg">message</b><span>那次调用的结果，例如 read 读到的内容</span></div>
+      <div class="jl dim"><i>…</i><b class="k-cut">compact</b><span>压缩分隔。这一版写不出来，见下</span></div>
+    </div>
+    <p>真实文件就是下面这样。为了能读，这里在括号处折了行；实际文件里每条记录都是不换行的一整行。</p>
+    <div class="raw">
+      <header><span>cat 帮我改个登录bug_3f9a.jsonl</span><span>4 行</span></header>
+      <pre><code>{"type":"meta","version":1,"cwd":"/Users/mac/proj/foo",
+ "provider":"deepseek","model":"deepseek-chat",
+ "createdAt":"2026-09-22T07:41:02.311Z","name":"帮我改个登录bug"}
+{"type":"message","role":"user","content":"帮我改个登录 bug"}
+{"type":"message","role":"assistant","content":[
+ {"type":"text","text":"先看一下登录入口。"},
+ {"type":"toolCall","id":"call_1","name":"read",
+  "arguments":{"path":"src/login.ts"}}],
+ "stopReason":"toolUse","usage":{"input":1820,"output":96}}
+{"type":"message","role":"toolResult","toolCallId":"call_1",
+ "toolName":"read","content":"export function login(...)…",
+ "isError":false}</code></pre>
+    </div>
+    <p>每行开头的 <code>type</code> 决定这行是什么。对话行里的 <code>role</code> 分出是你说的、模型回的、还是工具结果。第三行的 <code>call_1</code> 和第四行的 <code>toolCallId</code> 是同一个值，这就是前面说的配对；<code>usage</code> 是这一轮的 token，<code>/cost</code> 和底栏的数字由这些值累加而来。</p>
+    <p><b>封面只有第一行有，而且只写一次。</b>它是这份会话的身份信息：当时在哪个目录、用的哪个厂家和模型、显示名是什么。列表里显示的名字来自这里，<code>/rename</code> 改的也是这里。它不参与对话——下次打开这份会话，用的仍是你启动时的厂家，不会按封面里记的那个切回去。版本号现在是 1；如果哪天读到一份版本号更大的，说明它是更新的 ti 写的，整份拒绝打开，而不是按老规则去猜。</p>
+    <p><b>中间每一行都是一句对话。</b>你说的话、模型的回复、工具返回的结果，在内存里是同一种东西，落盘也就是同一种行，没有分表。模型回复那一行里可能带着一次工具调用，紧跟其后的那行就是这次调用的结果，两者靠调用编号对上。这个配对关系在恢复时很关键：只有调用、没有结果，下一轮请求会被接口拒掉，所以读入时会把缺的那份补上。</p>
+    <p><b>最后那种分隔现在写不出来。</b>它是给以后的上下文压缩留的位置：压缩之后在这里划一道，读取时只取这道线之后的内容，线之前的原文仍留在文件里当记录。这一版没有任何命令会写它，但读取逻辑已经按「只取最后一道线之后」来实现，所以将来加上压缩，跨进程也能生效。</p>
+    <p>此外每份会话旁边还有一个同名的锁文件，内容就是正在写它的进程号。它不是对话内容，只用来挡住第二个 ti，规则见最后一节。目录权限 <code>0700</code>，会话文件 <code>0600</code>。当前目录是 git 仓库、并且 <code>.gitignore</code> 里还没有 <code>.ti</code> 时，建档会补上一行 <code>.ti/</code>，免得对话被提交上去；只打开旧会话不会去动它。</p>
+  </section>
+
+  <section class="phase" id="p2">
+    <div class="dot">贰</div>
+    <h2>追加 <a href="#p2">#</a></h2>
+    <p class="trigger"><b>谁触发：</b>你的每一句，以及 <code>agentTurn</code> 里的模型回复、工具结果、中断说明。都走 <code>pushMessage</code>。</p>
+    <p>落盘在 <code>appendLine</code>：打开文件，写一行，刷到磁盘。打开方式必须既能读最后一个字节、又能往末尾写——只写打开的话，读那个字节会失败，封面之后的每一句都存不进去。</p>
+    <div class="grid">
+      <table>
+        <caption>写之前先看文件现在什么样</caption>
+        <thead><tr><th>文件状态</th><th>怎么处理</th><th>这一轮结束时</th></tr></thead>
+        <tbody>
+          <tr><td>空的</td><td>先写封面，再写这一句</td><td>没有提示</td></tr>
+          <tr><td>末尾不是换行</td><td>补一个换行再写新行</td><td>没有提示</td></tr>
+          <tr><td>加上这行超 32 MB</td><td>这一句不写入</td><td>提示超出字节数</td></tr>
+          <tr><td>写入时报错</td><td>记下这次错误</td><td>提示最后那一次</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>上限是 33554432 字节。错误由 <code>takePersistError</code> 在本轮末尾取走，屏幕上是 <code>session not saved</code> 加那条原因。同一轮里失败多次，只显示最后一次。</p>
+    <div class="aside">
+      <b>末尾没换行意味着什么</b>
+      <p>上一次写到一半就断了。补换行之后，那半截单独占一行；以后读取时它解析不出来，直接跳过，不会连累下一句。</p>
+    </div>
+  </section>
+
+  <section class="phase" id="p3">
+    <div class="dot">叁</div>
+    <h2>撤回 <a href="#p3">#</a></h2>
+    <p class="trigger"><b>谁触发：</b><code>agentTurn</code> 抛错，并且此时一个字的回复都还没写出。</p>
+    <p>判断条件是消息条数仍等于刚写下你那句之后的条数。满足才调 <code>popMessage</code>。已经写出的回复和工具结果一律留着，不往回删。</p>
+    <p>内存先去掉最后一句。文件那边从末尾按字节找最后一行——先看最后 1 MB，这段里没有换行就把窗口翻倍，直到看见换行或到文件开头。按字节而不是按字符，是为了不把一个汉字从中间切开。</p>
+    <div class="grid">
+      <table>
+        <caption>取决于末尾那一行是什么</caption>
+        <thead><tr><th>最后一行</th><th>文件</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>完整的一句</td><td>从这行第一个字节截断</td><td>两边都少这一句</td></tr>
+          <tr><td>半截，解析不了</td><td>只去掉这截垃圾</td><td>上一行完好</td></tr>
+          <tr><td>封面或压缩分隔</td><td>一个字节不动</td><td>对话少一句，文件还留着</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>正常的失败路径里，最后一行就是你刚说的那句，所以文件回到只剩封面。截断本身出错，同样记进本轮的提示。</p>
+  </section>
+
+  <section class="phase" id="p4">
+    <div class="dot">肆</div>
+    <h2>恢复 <a href="#p4">#</a></h2>
+    <p class="trigger"><b>谁触发：</b>命令行 <code>--resume</code>（<code>main.ts</code> 在厂家定好之后调用），或对话中的 <code>/resume</code>。两条都进 <code>pickAndResume</code>。</p>
+    <p>列出当前目录最多 10 份，按修改时间新的在前。一份都没有、你取消了、或者这个终端不能交互，都保持现状：不换档，也不退出，不能交互时只把列表印出来。选中的正好是正在写的那份，提示 <code>already on this session</code>。</p>
+    <p>接着检查能不能打开：路径必须落在当前的 <code>sessions</code> 目录里（按真实路径判断，符号链接指向外面的不行），封面版本号大于 1 则整份拒绝。都通过才读入，并且先锁新文件、再放开旧文件——锁不上的话，内存里的对话不换，旧文件的锁还在手里。</p>
+    <div class="grid">
+      <table>
+        <caption>读进来时逐行的处理</caption>
+        <thead><tr><th>读到的行</th><th>放进这次对话</th></tr></thead>
+        <tbody>
+          <tr><td>坏 JSON，或形状不对</td><td>跳过</td></tr>
+          <tr><td>你说的一句</td><td>先补上还没结束的工具结果，再放入</td></tr>
+          <tr><td>工具结果，对得上调用</td><td>放入，并消掉这次调用</td></tr>
+          <tr><td>工具结果，对不上</td><td>丢掉</td></tr>
+          <tr><td>读完仍有未结束的调用</td><td>补一条错误结果</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>修补只发生在内存。补出来的那句是 <code>Error: missing tool result (session repaired)</code>，不回写文件，所以下次打开会按同样规则再补一次。最后历史直接灌进数组、画回屏幕，提示 <code>resumed N messages</code>。单条超过 4000 字只在屏幕上截断，文件里的原文不动。</p>
+    <div class="aside">
+      <b>为什么不走 pushMessage</b>
+      <p>那是「新增一句」的入口，会往文件末尾追加。恢复时如果用它灌历史，文件末尾就会多出一整份副本。</p>
+    </div>
+  </section>
+
+  <section class="phase" id="p5">
+    <div class="dot">伍</div>
+    <h2>改名与互斥 <a href="#p5">#</a></h2>
+    <p class="trigger"><b>谁触发：</b><code>/rename 新名字</code>；<code>/clear</code>；以及第二个 ti 打开同一份。</p>
+    <p>改名时显示名取第一行，文件短名按建档那套规则重做，原来的 4 位后缀尽量保留。新名字用硬链接先占住，锁上之后再删掉旧名字——直接改名会覆盖磁盘上已经存在的另一份会话，所以不能用。不带名字的 <code>/rename</code> 只显示当前名字，还没有文件时说 <code>no session yet</code>。</p>
+    <div class="grid">
+      <table>
+        <caption>五种情形</caption>
+        <thead><tr><th>情形</th><th>文件</th><th>屏幕</th></tr></thead>
+        <tbody>
+          <tr><td>新名字没人占</td><td>换成新名字</td><td><code>renamed</code></td></tr>
+          <tr><td>新名字已有一份</td><td>另抽后缀，最多 8 次</td><td>那一份完好</td></tr>
+          <tr><td>不能做硬链接</td><td>旧名字不动</td><td><code>session not saved</code></td></tr>
+          <tr><td>第二个 ti 来开</td><td>打不开</td><td><code>session is in use</code></td></tr>
+          <tr><td>你执行 <code>/clear</code></td><td>旧文件留着</td><td>下一句另建一份</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>锁的规则在 <code>acquireLock</code>：锁里的进程号就是自己，视为已经拿着；进程还活着、或者没有权限探测它是否活着，都拒绝；进程确实不在了，删掉锁再试，最多 5 次。这个 ti 退出时放开自己那把锁。<code>/clear</code> 走 <code>endSession</code>，只是放开锁、忘掉 <code>writer</code>，不删文件。</p>
+  </section>
+
+  <section class="phase" id="p6">
+    <div class="dot">陆</div>
+    <h2>怎么验 <a href="#p6">#</a></h2>
+    <p class="trigger"><b>在哪看：</b>当前目录的 <code>.ti/sessions/</code>。每条都能直接观察到。</p>
+    <ul class="verify">
+      <li><input type="checkbox" id="v1"><label for="v1">只打 <code>/help</code> 再退出，目录里没有新的 jsonl。</label></li>
+      <li><input type="checkbox" id="v2"><label for="v2">说一句并正常收到回复，文件里至少有封面、你那句、回复三行。</label></li>
+      <li><input type="checkbox" id="v3"><label for="v3">请求在回复出现前失败，文件里只剩封面一行。</label></li>
+      <li><input type="checkbox" id="v4"><label for="v4"><code>/clear</code> 后再说一句，旧文件还在，新内容在另一份里。</label></li>
+      <li><input type="checkbox" id="v5"><label for="v5">恢复同一份再退出，这份文件的行数没有翻倍。</label></li>
+      <li><input type="checkbox" id="v6"><label for="v6">第二个 ti 去开正在写的那份，提示 in use，第一个照样能写。</label></li>
+      <li><input type="checkbox" id="v7"><label for="v7">换一个目录执行 <code>--resume</code>，看不到刚才那个目录的会话。</label></li>
+    </ul>
+    <div class="anchors">
+      <div><b>core/session.ts</b><span>文件、锁、封面、撤回、修补</span></div>
+      <div><b>cli/repl.ts</b><span>你的输入、四个斜杠命令、提示</span></div>
+      <div><b>core/agent.ts</b><span>回复与工具结果，只调 pushMessage</span></div>
+    </div>
+  </section>
+
+  <footer class="end">
+    另外两处：<code>cli/render.ts</code> 负责把历史画回屏幕，<code>main.ts</code> 认命令行上的 <code>--resume</code>。<a href="#">回到顶部</a>
+  </footer>
+</main>
+
+<script>
+  const bar = document.getElementById("reading");
+  const links = Array.from(document.querySelectorAll(".toc a"));
+  const parts = links.map((a) => document.querySelector(a.getAttribute("href")));
+  function paint() {
+    const doc = document.documentElement;
+    const span = doc.scrollHeight - doc.clientHeight;
+    bar.style.width = (span > 0 ? (doc.scrollTop / span) * 100 : 0) + "%";
+    let here = parts[0];
+    for (const part of parts) {
+      if (part && part.getBoundingClientRect().top < 110) here = part;
+    }
+    links.forEach((a) => a.classList.toggle("on", here && a.getAttribute("href") === "#" + here.id));
+  }
+  document.addEventListener("scroll", paint, { passive: true });
+  paint();
+</script>
+</body>
+</html>
