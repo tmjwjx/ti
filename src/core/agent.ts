@@ -1,9 +1,10 @@
 // 一轮用户输入：问模型 → 有完整 toolCall 就执行并回灌 → 再问
-// 说完、流失败或超过 MAX_TURNS 则结束。状态就是 messages
+// 说完、流失败或超过 MAX_TURNS 则结束。状态就是 messages，进出走 pushMessage
 import type { Message, StopReason, ToolCall } from "../types.ts";
 import { getProvider } from "../config/index.ts";
 import { callLLM, isAbortError } from "../llm/index.ts";
 import { runTool, TOOLS } from "../tools/index.ts";
+import { pushMessage } from "./session.ts";
 
 const MAX_TURNS = 100;
 // 连续「有调用但不执行」只 seal 再 continue，到次数就停
@@ -27,7 +28,7 @@ export interface AgentContext {
 // 给尚未有结果的 toolCall 补一条错误结果，避免下一轮协议 400
 function sealTools(calls: ToolCall[], messages: Message[], reason: string) {
   for (const tc of calls) {
-    messages.push({ role: "toolResult", toolCallId: tc.id, toolName: tc.name, content: reason, isError: true });
+    pushMessage(messages, { role: "toolResult", toolCallId: tc.id, toolName: tc.name, content: reason, isError: true });
   }
 }
 
@@ -71,7 +72,7 @@ function finishInterrupted(messages: Message[], ui: AgentUI): void {
     sealTools(open, messages, reason);
   } else {
     // 半截字或零字节：留下已有内容，用一条真 message 让下一轮不是没人答的提问
-    messages.push({ role: "user", content: "[interrupted]" });
+    pushMessage(messages, { role: "user", content: "[interrupted]" });
   }
   ui.info("[interrupted]");
 }
@@ -111,7 +112,7 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
     const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
     // 用户 abort 先收尾，不要和流失败合成
     if (signal?.aborted) {
-      messages.push(msg);
+      pushMessage(messages, msg);
       noteTokens();
       finishInterrupted(messages, ui);
       return;
@@ -119,7 +120,7 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
     const failReason = streamFailReason(msg.stopReason);
     if (failReason) {
       // 半截工具不跑，未配的补真实原因，然后停这一轮，不再问模型
-      messages.push(msg);
+      pushMessage(messages, msg);
       for (const tc of toolCalls) ui.toolCall(tc);
       sealTools(toolCalls, messages, failReason);
       noteTokens();
@@ -135,7 +136,7 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
       noteTokens();
       break;
     }
-    messages.push(msg);
+    pushMessage(messages, msg);
     if (toolCalls.length === 0) {
       noteTokens();
       break;
@@ -170,7 +171,7 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
         isError = true;
       }
       ui.result(out, isError);
-      messages.push({ role: "toolResult", toolCallId: tc.id, toolName: tc.name, content: out, isError });
+      pushMessage(messages, { role: "toolResult", toolCallId: tc.id, toolName: tc.name, content: out, isError });
     }
     noteTokens();
     if (signal?.aborted) {

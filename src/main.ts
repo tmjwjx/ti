@@ -4,7 +4,7 @@ import type { Message } from "./types.ts";
 import { isProviderReady, resolveProvider, setProvider, settings } from "./config/index.ts";
 import { buildSystemPrompt } from "./core/prompt.ts";
 import { createTerminalUI } from "./cli/render.ts";
-import { repl } from "./cli/repl.ts";
+import { pickAndResume, repl } from "./cli/repl.ts";
 import { openTui } from "./cli/tui.ts";
 import type { Tui } from "./cli/tui.ts";
 import { FormAbort } from "./cli/form.ts";
@@ -13,10 +13,11 @@ import { runSetup } from "./cli/setup.ts";
 // 打印用法并退出
 function help(code: number): never {
   console.log(`ti
-usage: ti [setup] [--provider name] [-m model]
+usage: ti [setup] [--provider name] [-m model] [--resume]
   setup            configure provider, model, and API key
   -m, --model      model name
       --provider   deepseek | kimi | glm | custom names from settings.json
+      --resume     pick a session from this directory
 config: ~/.ti/settings.json`);
   process.exit(code);
 }
@@ -55,12 +56,14 @@ async function main() {
   let forceSetup = false;
   let cliProvider: string | undefined;
   let cliModel: string | undefined;
+  let resume = false;
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "setup") forceSetup = true;
     else if (a === "--provider" && args[i + 1]) cliProvider = args[++i]; // ++i 吃掉下一个参数当值
     else if ((a === "-m" || a === "--model") && args[i + 1]) cliModel = args[++i];
+    else if (a === "--resume") resume = true;
     else if (a === "-h" || a === "--help") help(0);
     else {
       console.error(`error: unknown argument ${a}`);
@@ -81,6 +84,11 @@ async function main() {
 
     const systemPrompt = await buildSystemPrompt();
     const messages: Message[] = [];
+    // 厂家已经定了再挑会话。恢复不切 provider，meta 里的只是当时记录
+    if (resume) {
+      const say = tui ? (s: string) => tui.writeln(s) : (s: string) => console.log(s);
+      await pickAndResume(messages, say, tui);
+    }
     if (tui) {
       await repl(messages, { systemPrompt, ui: createTerminalUI(tui) }, tui);
     } else {

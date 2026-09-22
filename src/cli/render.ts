@@ -5,7 +5,7 @@
 //
 // 给模型的数据不在这里截：完整参数在 tc.arguments，完整结果在 messages
 // 这里只缩短印到屏幕上的那一小段
-import type { ToolCall } from "../types.ts";
+import type { Message, ToolCall, UserMessage } from "../types.ts";
 import type { AgentUI } from "../core/agent.ts";
 
 const TTY = process.stdout.isTTY;
@@ -52,4 +52,44 @@ export function createTerminalUI(out?: { write(s: string): void; writeln(s: stri
     info: (s) => writeln(dim(s)),
     error: (s) => writeln(red(s)),
   };
+}
+
+// 用户消息收成纯文本
+function userText(m: UserMessage): string {
+  if (typeof m.content === "string") return m.content;
+  return m.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+}
+
+// 把已有历史按当时的样子画回屏幕。复用 createTerminalUI，跳过流转和 token 行
+export function replayMessages(
+  messages: Message[],
+  out?: { write(s: string): void; writeln(s: string): void },
+): void {
+  const ui = createTerminalUI(out);
+  const writeln = out?.writeln ?? ((s: string) => console.log(s));
+  for (const m of messages) {
+    if (m.role === "user") {
+      const text = userText(m);
+      writeln("");
+      for (const [i, part] of text.split("\n").entries()) {
+        writeln((i === 0 ? `${cyan("❯")} ` : "  ") + part);
+      }
+      continue;
+    }
+    if (m.role === "assistant") {
+      let hadText = false;
+      for (const b of m.content) {
+        if (b.type === "text" && b.text) {
+          ui.text(b.text); // 整段一次写出，不是流式
+          hadText = true;
+        }
+      }
+      if (hadText) writeln("");
+      for (const b of m.content) {
+        if (b.type === "toolCall") ui.toolCall(b);
+      }
+      continue;
+    }
+    ui.result(m.content, m.isError);
+  }
 }

@@ -13,7 +13,20 @@ import {
   saveSettings,
 } from "../config/index.ts";
 import { agentTurn, type AgentContext } from "../core/agent.ts";
-import { dim, red } from "./render.ts";
+import {
+  bindSession,
+  endSession,
+  listSessions,
+  loadMessages,
+  openSession,
+  popMessage,
+  pushMessage,
+  renameSession,
+  sessionFile,
+  sessionName,
+  type SessionInfo,
+} from "../core/session.ts";
+import { dim, red, replayMessages } from "./render.ts";
 import type { Tui } from "./tui.ts";
 import { FormAbort, select } from "./form.ts";
 import { runSetup } from "./setup.ts";
@@ -22,6 +35,8 @@ type Say = (s: string) => void;
 
 export const COMMANDS = [
   { name: "/clear", hint: "clear conversation" },
+  { name: "/resume", hint: "resume a session in this directory" },
+  { name: "/rename", hint: "rename this session" },
   { name: "/model", hint: "switch configured model" },
   { name: "/provider", hint: "switch configured provider" },
   { name: "/setup", hint: "add or edit provider" },
@@ -57,6 +72,66 @@ function shortHome(p: string): string {
 }
 
 let lastTurn = { input: 0, output: 0 };
+
+// 列表里一项的显示
+function sessionLabel(s: SessionInfo): string {
+  const title = (s.name || "untitled").slice(0, 48);
+  const d = new Date(s.mtime);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const when = sameDay
+    ? d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString("en-CA");
+  return `${title}  ·  ${s.count} msgs  ·  ${when}`;
+}
+
+// 从当前目录挑一份会话并接上。--resume 与 /resume 共用
+// 选中后就地换数组，不能再走 pushMessage，否则会在旧文件末尾复制一份历史
+export async function pickAndResume(messages: Message[], say: Say, tui?: Tui): Promise<boolean> {
+  const items = listSessions(10);
+  if (!items.length) {
+    say(dim("no sessions in this directory"));
+    return false;
+  }
+  const choices = items.map((s) => ({
+    value: s.file,
+    label: sessionLabel(s),
+    current: s.file === sessionFile(),
+  }));
+  let file: string | undefined;
+  if (tui) {
+    file = await tui.pick("Resume", choices);
+  } else if (process.stdin.isTTY && process.stdout.isTTY) {
+    try {
+      file = await select("Resume", choices);
+    } catch (e) {
+      if (!(e instanceof FormAbort)) throw e;
+    }
+  } else {
+    // 管道里没法交互选，只打印列表，保持现状当新开
+    for (const s of items) say(dim(sessionLabel(s)));
+    return false;
+  }
+  if (!file) return false; // 取消：不退出、不换档
+  if (file === sessionFile()) {
+    say(dim("already on this session"));
+    return false;
+  }
+  let loaded: Message[];
+  try {
+    loaded = loadMessages(file);
+  } catch (e) {
+    say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
+    return false;
+  }
+  bindSession(openSession(file));
+  messages.length = 0;
+  for (const m of loaded) messages.push(m); // 灌内存，不落盘
+  lastTurn = { input: 0, output: 0 };
+  tui?.clear();
+  replayMessages(messages, tui);
+  say(dim(`resumed ${loaded.length} messages`));
+  return true;
+}
 
 // 底栏文案
 function footerText(messages: Message[]): string {
@@ -198,10 +273,26 @@ async function dispatch(
     return "cont";
   }
   if (line === "/clear") {
-    messages.length = 0; // 就地清空，调用方拿的还是同一份数组。
+    messages.length = 0; // 就地清空，调用方拿的还是同一份数组
     lastTurn = { input: 0, output: 0 };
+    endSession(); // 断档，旧 jsonl 留在磁盘，下一句用户输入开新文件
     tui?.clear();
     say(dim("(context cleared)"));
+    return "cont";
+  }
+  if (line === "/resume") {
+    await pickAndResume(messages, say, tui);
+    return "cont";
+  }
+  if (line === "/rename" || line.startsWith("/rename ")) {
+    const arg = line.slice(7).trim(); // "/rename".length === 7
+    if (!arg) {
+      const cur = sessionName();
+      say(dim(cur ? `session  ${cur}` : "no session yet"));
+      return "cont";
+    }
+    const next = renameSession(arg);
+    say(dim(next ? `renamed → ${arg}` : "no session yet"));
     return "cont";
   }
   if (line === "/setup") {
@@ -249,7 +340,7 @@ async function dispatch(
     return "cont";
   }
   if (!line) return "cont";
-  messages.push({ role: "user", content: line });
+  pushMessage(messages, { role: "user", content: line });
   const afterUser = messages.length;
   // 用差值算「这一轮」token，footer 的 turn 才不会被历史冲掉
   const before = tokenTotals(messages);
@@ -262,7 +353,7 @@ async function dispatch(
     say("");
   } catch (e) {
     // 还没写出 assistant 才拿掉这条 user。已经写下的轮次原样留（toolResult 齐全）。abort 不会到这里
-    if (messages.length === afterUser) messages.pop();
+    if (messages.length === afterUser) popMessage(messages);
     say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
   }
   return "cont";

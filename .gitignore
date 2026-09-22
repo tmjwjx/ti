@@ -3,4 +3,5 @@ bin/
 .DS_Store
 scratch/
 *.tgz
+.ti/
 
