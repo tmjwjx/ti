@@ -1,57 +1,58 @@
 # ti 产品需求与技术方案文档（PRD）
 
-> 版本：v1.0 · 日期：2026-08-16（2026-08-18 范围冻结） · 状态：**范围已冻结**，详细设计见 `docs/DESIGN.md`
+> 初版需求 · 日期：2026-08-16（2026-08-18 范围冻结）· 2026-09-16 与当前实现对照
 > 包名：`@tmjwjx/ti`（scoped，bin 命令 `ti`）· 仓库：github.com/tmjwjx/ti（暂私有，发布时转公开）
+> 已落地与未做以本文 4.1 / 4.2 进度为准；详细设计见 `docs/DESIGN.md`；包号与发版对照见 `docs/VERSIONS.md`
 
 ## 1. 背景与参考对象
 
-ti 是一个极简 coding agent CLI，设计主要参考两个开源项目：
+ti 是一个极简 coding agent CLI，设计主要参考三个开源项目：
 
-| | **pi**（badlogic/pi-mono） | **DeepSeek Harness (dsh)** |
-|---|---|---|
-| 定位 | 极简但可扩展的终端 coding agent | 「Model + Harness = Agent」的 agent 运行时 |
-| 打包 | npm `@mariozechner/pi-coding-agent`，bin→`dist/cli.js`，tsc 构建，~23 个依赖 | npm `@deepseek-ai/dsh`，pnpm monorepo，Cordis 插件框架 |
-| 核心 | 4 工具（read/write/edit/bash）+ <1k tokens 系统提示词 + TS 扩展/skills | 一切皆插件；Standard/PTC/Minimal/Creator 四模式；Web UI + headless |
-| 刻意不做 | MCP、子 agent、权限弹窗、plan mode、内置 todo | 完整终端 TUI（CLI 只做启动器，交互在 Web） |
+| | **pi**（badlogic/pi-mono） | **Codex**（openai/codex） | **DeepSeek Harness (dsh)** |
+|---|---|---|---|
+| 定位 | 极简但可扩展的终端 coding agent | OpenAI 官方终端 coding agent | 「Model + Harness = Agent」的 agent 运行时 |
+| 打包 | npm `@mariozechner/pi-coding-agent`，bin→`dist/cli.js`，tsc 构建，~23 个依赖 | npm `@openai/codex`：JS 启动器 + 分平台原生二进制（Rust 内核） | npm `@deepseek-ai/dsh`，pnpm monorepo，Cordis 插件框架 |
+| 核心 | 4 工具（read/write/edit/bash）+ <1k tokens 系统提示词 + TS 扩展/skills | 沙箱、审批、MCP、session resume、TUI | 一切皆插件；Standard/PTC/Minimal/Creator 四模式；Web UI + headless |
+| 刻意不做 | MCP、子 agent、权限弹窗、plan mode、内置 todo | 不走极简：功能按官方产品铺开 | 完整终端 TUI（CLI 只做启动器，交互在 Web） |
 
-**ti 的取舍**：取 pi 的「极简内核」（agent loop + 4 工具 + 小提示词）与 dsh 的「多协议、配置化」，刻意保持**零运行时依赖、单文件**，不做插件框架与 Web UI。
+**ti 的取舍**：取 pi 的「极简内核」（agent loop + 4 工具 + 小提示词）、dsh 的「多协议、配置化」，以及 Codex 的会话按项目隔离和 resume 交互。刻意保持**零运行时依赖**，开发模块化、发布打成单文件。不取 Codex 的 Rust 全家桶、沙箱、审批、MCP，也不做插件框架与 Web UI。
 
 ## 2. 产品定位与目标
 
-**一句话**：`npm i -g @tmjwjx/ti` 装完即用的极简 coding agent，单文件、零依赖、双协议（Anthropic / OpenAI 兼容），面向想读得懂每一行源码的开发者。
+**一句话**：`npm i -g @tmjwjx/ti` 装完即用的极简 coding agent，零运行时依赖、双协议（Anthropic / OpenAI 兼容），面向想读得懂源码的开发者。
 
-**v1.0 目标**：基本可用——日常真实编码任务可以全程在 ti 里完成，不掉链子（会话可恢复、可中断、上下文可压缩）。
+**初版目标**：基本可用——日常真实编码任务可以全程在 ti 里完成，不掉链子（会话可恢复、可中断、上下文可压缩）。
 
-**非目标（YAGNI，明确不做）**：插件/扩展系统、Web UI、MCP、子 agent、PTC 模式、主题系统、内置 todo 工具（用 TODO.md 文件代替，pi 哲学）；权限确认（工具直接执行，没有 ask）。skills 只做本地目录扫描的基础机制（F9），不做市场/包分发。
+**非目标（YAGNI，明确不做）**：插件/扩展系统、Web UI、MCP、子 agent、PTC 模式、主题系统、内置 todo 工具（用 TODO.md 文件代替，pi 哲学）；权限确认（工具直接执行，没有 ask）。skills 只做本地目录扫描的基础机制，不做市场或包分发。
 
 ## 3. 目标用户与场景
 
-- 想学习「coding agent 原理」的开发者：单文件、逐行中文注释、架构文档齐全
-- 用国产模型端点（DeepSeek/Kimi 等 Anthropic 或 OpenAI 兼容协议）的开发者
-- 场景：在某个项目目录里 `ti` 启动 → 自然语言派活（读代码、改 bug、写脚本、跑测试）→ 中断/恢复/压缩上下文 → 退出后会话仍在
+- 想学习「coding agent 原理」的开发者：模块化源码、中文注释、架构文档齐全
+- 用国产模型端点（Anthropic 或 OpenAI 兼容协议）的开发者
+- 场景：在某个项目目录里 `ti` 启动 → 自然语言派活（读代码、改 bug、写脚本、跑测试）→ 可中断当前 turn → `--resume` 或 `/resume` 接上。上下文压缩仍是初版未做项
 
 ## 4. 功能需求
 
-### 4.1 已完成（v0.1 现状）
+### 4.1 已落地
 
-agent loop（流式请求→工具执行→结果回灌→循环）；4 工具（read/write/edit/bash，参数对齐 pi）；双协议（Anthropic Messages / OpenAI chat completions）；max_tokens 截断保护；配置体系（CLI > `~/.ti/settings.json` > 预设；不采用环境变量的值）；REPL（`/model` `/clear` `/exit`）；工具直接执行，没有权限确认；AGENTS.md/CLAUDE.md 自动注入；token 每轮统计。
+agent loop（流式请求→完整 toolCall 才执行→结果回灌→循环）；4 工具（read/write/edit/bash）；双协议（Anthropic Messages / OpenAI chat completions）；`AbortSignal` 贯穿 fetch 与 bash；`finishInterrupted` 中断收尾；流失败（`incomplete` / `badArgs`）停轮；`length` 截断 seal 最多 3 次；`CATALOG`（deepseek / kimi / glm）+ `~/.ti/settings.json`（CLI > 文件里写了的字段 > 目录托底；不读 env）；settings 目录 `0o700`、文件 `0o600`；`--provider` 失败即退出；TTY 主屏 TUI + 非 TTY readline；斜杠 `/clear` `/resume` `/rename` `/model` `/provider` `/setup` `/cost` `/help` `/exit`；底栏 setup 向导；工具直接执行，没有权限确认；AGENTS.md/CLAUDE.md 自动注入；每轮 token + `/cost` 会话累计；`<cwd>/.ti/sessions/*.jsonl` 持久化，`--resume` 与 `/resume` 只列当前目录。
 
-### 4.2 v1.0 新增（基本可用必备）
+### 4.2 初版范围（进度对照）
 
-| # | 功能 | 描述 | 验收标准 |
+| 功能 | 进度 | 描述 | 验收标准 |
 |---|---|---|---|
-| F1 | **session 持久化与恢复** | 消息历史实时追加写入 `~/.ti/sessions/<cwd目录名>-<时间戳>.jsonl`（首行 meta：cwd/provider/model/创建时间）；`ti -c/--continue` 继续当前目录最近一次会话；`ti --resume` 列出最近会话选择 | 杀掉进程后 `ti -c` 能完整接续上下文；session 文件可直接 `cat` 阅读 |
-| F2 | **中断** | agent 执行期间 Ctrl+C 或 Esc 中断当前 turn（AbortSignal 贯穿 fetch 与 bash），回到提示符不退出。收尾走 `finishInterrupted`：未配 toolCall 只 seal；否则留下已有内容并 push `user("[interrupted]")`；屏幕 `ui.info("[interrupted]")`。空闲时 Ctrl+C 退出（见 4.4 与 DESIGN.md §3-F2） | 长跑 bash 命令能被打断；被打断的 turn 协议合法，屏幕出现 `[interrupted]` |
-| F3 | **无权限确认（不做）** | 工具直接执行，没有权限确认。ask 方案见 DESIGN.md F3 设计稿，不是交付项 | 调用工具时立即执行，终端不出现确认 |
-| F4 | **/compact 上下文压缩** | 把当前消息历史发给模型生成结构化摘要（已完成事项/改动文件/关键决策/待办），替换为单条摘要消息继续会话；原始历史保留在 session 文件 | 压缩后 token 数显著下降；模型能基于摘要正确接续工作 |
-| F5 | **输入体验** | readline 历史持久化到 `~/.ti/history`（上限 1000 条）；支持 `\` 续行多行输入 | 重启后方向键↑能翻出上次会话的命令 |
-| F6 | **token 会话累计** | 每轮已有统计基础上加会话累计；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到 v1.1） | `/cost` 显示累计 in/out token 与会话轮数 |
-| F7 | **npm 打包就绪（不发布）** | 方案 A：hashbang + `bin:{"ti":"./agent.ts"}` + `engines:{"node":">=22.18.0"}` + `files` 白名单 + MIT LICENSE + 英文优先 README（保留中文小节）；`npm pack` 检查产物；全局安装自测 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
-| F8 | **冒烟测试** | `scripts/smoke.mjs`：内置 mock server（OpenAI 协议）+ 罐头 SSE，跑通「工具调用全链路 / 配置优先级 / /model」断言；`npm test` 可跑 | 无真实 API key 时 `npm test` 全绿 |
-| F9 | **skills** | 启动时扫描 `~/.ti/skills/*/SKILL.md` 与项目 `.ti/skills/*/SKILL.md`，解析 frontmatter 的 name/description（手写两行解析，不引 yaml 库），把技能清单（名称+一句话）追加进系统提示词；模型按需用现有 read 工具读取完整 SKILL.md——渐进披露，pi 同款机制 | 放一个 SKILL.md 到 skills 目录后，agent 能在对话中识别并正确按技能指示行动 |
-| F10 | **/provider 命令** | REPL 内 `/provider` 列出全部可用 provider（内置预设 + settings.json 自定义，标注当前）；`/provider <name>` 整套切换（baseURL/key/默认模型）；分工明确：/provider 换配置、/model 只换模型名 | 不重启即可在 deepseek / anthropic / 自定义配置间切换 |
+| **session 持久化与恢复** | 已落地 | 消息（含工具结果与 token）写入 `<cwd>/.ti/sessions/<首句 slug>_<4hex>.jsonl`；`ti --resume` 与 `/resume` 只列当前目录。没有 `-c` | 杀掉进程后 `--resume` 或 `/resume` 能完整接续；A、B 项目互不可见；session 文件可直接 `cat` |
+| **中断** | 已落地 | agent 执行期间 Ctrl+C 或 Esc 中断当前 turn（AbortSignal 贯穿 fetch 与 bash），回到提示符不退出。收尾走 `finishInterrupted`：未配 toolCall 只 seal；否则留下已有内容并 push `user("[interrupted]")`；屏幕 `ui.info("[interrupted]")`。空闲时 Ctrl+C 退出（见 4.4 与 DESIGN.md 中断一节） | 长跑 bash 命令能被打断；被打断的 turn 协议合法，屏幕出现 `[interrupted]` |
+| **权限确认** | 不做 | 工具直接执行，没有权限确认。ask 方案见 DESIGN.md 权限一节，不是交付项 | 调用工具时立即执行，终端不出现确认 |
+| **/compact 上下文压缩** | 未做 | 把当前消息历史发给模型生成结构化摘要（已完成事项、改动文件、关键决策、待办），替换为单条摘要消息继续会话；原始历史保留在 session 文件 | 压缩后 token 数显著下降；模型能基于摘要正确接续工作 |
+| **输入体验** | 未做 | 历史持久化到 `~/.ti/history`（上限 1000 条）；支持 `\` 续行多行输入。TUI 已有进程内 ↑↓ 历史与 Shift+Enter 换行，不是本项 | 重启后方向键↑能翻出上次会话的命令 |
+| **token 会话累计** | 已落地 | 从 `messages` 累计 in/out 与调用次数；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到初版之后） | `/cost` 显示累计 in/out token 与会话轮数 |
+| **npm 打包就绪（不发布）** | 部分 | 现状：`scripts/build.mjs`（esbuild minify）→ `bin/ti.js`，`bin:{"ti":"bin/ti.js"}`，`files:["bin"]`，`engines` Node ≥22.18，MIT LICENSE。开发 `npm start` 直跑 `src/`。仍缺：英文优先 README、`npm test` 冒烟 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
+| **冒烟测试** | 未做 | `scripts/smoke.mjs`：内置 mock server（OpenAI 协议）+ 罐头 SSE，跑通「工具调用全链路、配置优先级、`/model`」断言；`npm test` 可跑 | 无真实 API key 时 `npm test` 全绿 |
+| **skills** | 未做 | 启动时扫描 `~/.ti/skills/*/SKILL.md` 与项目 `.ti/skills/*/SKILL.md`，解析 frontmatter 的 name/description（手写两行解析，不引 yaml 库），把技能清单（名称+一句话）追加进系统提示词；模型按需用现有 read 工具读取完整 SKILL.md——渐进披露，pi 同款机制 | 放一个 SKILL.md 到 skills 目录后，agent 能在对话中识别并正确按技能指示行动 |
+| **/provider 命令** | 已落地 | REPL 内 `/provider` 列出已就绪 provider；`/provider <name>` 整套切换。TUI 下无参展开二级列表。`/model` 只切已写入的模型名 | 不重启即可在已配置的厂家间切换 |
 
-### 4.3 v1.1+ 候选（明确排在 v1.0 之后）
+### 4.3 初版之后的候选
 
 extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost 金额统计（内置可配置价格表）；`/init` 生成 AGENTS.md；bash 后台任务；粘贴多行优化；PTC 模式调研（dsh）。
 
@@ -59,12 +60,13 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 
 **已落地**
 
-- footer：`provider:model · cwd · turn in/out · session in/out`；模型在跑时右侧 `esc interrupt`
+- footer：`provider:model · cwd · turn ↑↓ · session ↑↓`；模型在跑时右侧 `esc interrupt`，有排队则 `queued N`
 - 每轮 LLM 调用后 transcript 打 token；`/cost` 看会话累计
-- 输入 `/` 出命令列表，↑↓ 选，Tab 补全，Enter 提交
-- editor：Ctrl+A/E 行首尾，Ctrl+U/K 删到行首/行尾，Ctrl+H 删前一字，Delete 删后一字；插入走 `isCharKey`（按码点，emoji 能进）。没有 Ctrl+D
-- 模型在跑时 editor 仍可输入；Enter 排队等本轮结束再发；半截 CSI 后续字节重设 40ms，超时丢掉
-- 退出和打断只走 Ctrl+C：有字清空，向导取消，busy 打断，空闲退出；Esc 向导取消或 busy 打断；`/exit` 退出
+- 输入 `/` 出命令列表，↑↓ 选，Tab 补全，Enter 提交；`/model` `/provider` 二级
+- editor：Ctrl+A/E 行首尾，Ctrl+U/K 删到行首/行尾，Ctrl+H 删前一字，Delete 删后一字，Ctrl+B/F 左右，Ctrl+P/N 上下，Ctrl+←/→ 按词跳，Home/End，Shift+Enter 换行；插入走 `isCharKey`（按码点，emoji 能进）。没有 Ctrl+D
+- 模型在跑时 editor 仍可输入；Enter 排队等本轮结束再发；半截 CSI 或 SS3 等 40ms，超时丢掉、不重放
+- PageUp/PageDown 滚视口
+- 退出和打断只走 Ctrl+C：有字清空，向导取消，busy 打断，空闲退出；Esc：向导取消 → 二级往回退 → busy 打断（不丢队列）→ 清空；`/exit` 退出
 - 重绘：行级 diff + CSI 2026，不再每帧 `\x1b[H\x1b[J`
 - transcript：用户 `❯`、工具 `→` 缩进、结果再缩进、token 单独一行
 
@@ -75,81 +77,87 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 - 括号粘贴（bracketed paste）、`@` 文件、Tab 路径补全
 - 鼠标滚轮 / 选中复制的应用层处理
 - `/cost` 金额（价格表易过时）
-- 历史持久化到 `~/.ti/history`（仍是 PRD F5）
+- 历史持久化到 `~/.ti/history`（仍是「输入体验」那一项）
 
 ## 5. 非功能需求
 
-- **零运行时依赖**：只用 Node 标准库；devDependency 也不引入（测试用内置 mock）
+- **零运行时依赖**：只用 Node 标准库。devDependency 仅 `@types/node` 与发布用 esbuild
 - **体积**：包 <100KB；冷启动 <300ms
-- **兼容**：Node ≥22.18（type-stripping 免构建的最低版本；与 dsh 的 ^22.19/>=24 同代际）
+- **兼容**：Node ≥22.18（开发 type-stripping 免 flag；与 dsh 的 ^22.19/>=24 同代际）
 - **安全**：工具直接执行，没有权限确认；apiKey 只写 `~/.ti/settings.json`（文件 `0o600`，目录 `0o700`）；bash 无沙箱（文档明示风险，同 pi）
-- **可维护**：`src/` 模块化拆分（按层分文件、单职责，详见 DESIGN.md §2；不设行数硬指标，职责清晰为准）；免构建直发（type-stripping），bin 入口固定 `src/main.ts`
+- **可维护**：`src/` 模块化拆分（按层分文件、单职责，详见 DESIGN.md §2；不设行数硬指标，职责清晰为准）；开发直跑 `src/main.ts`，发布入口 `bin/ti.js`
 
 ## 6. 技术方案
 
-### 6.1 架构（在现有五层上增量）
+### 6.1 架构（在现有四层上增量）
 
 ```
-配置层  ~/.ti/settings.json + CLI              （现状，不采用环境变量的值）
-交互层  REPL           → 加：中断处理、历史持久化、/compact /cost
-循环层  agentTurn      → 加：AbortSignal 贯穿、session 追加写
-传输层  callLLM 双协议 → 加：fetch(signal)、usage 累计
-工具层  runTool 4 工具 → 加：bash 接 AbortSignal（kill 进程）
+配置层  CATALOG + ~/.ti/settings.json + CLI     （已落地；不采用环境变量的值）
+交互层  TUI / readline  REPL                     （已落地：中断、/cost、/provider）
+循环层  agentTurn                                （已落地：AbortSignal、finishInterrupted）
+传输层  callLLM 双协议                           （已落地：fetch(signal)、usage）
+工具层  runTool 4 工具                           （已落地：bash 接 AbortSignal）
+待加    /compact、skills、历史落盘
 ```
 
-- **session 格式（JSONL，线性）**：首行 `{"type":"meta","version":1,"cwd","provider","model","createdAt"}`，之后每行一条 `{"type":"message","role","content"}`；恢复时读文件重建 `messages[]`
+- **session**：`<cwd>/.ti/sessions/*.jsonl`。`--resume` 与 `/resume` 只列当前目录。没有 `-c`
 - **中断**：每轮聊天一个 `AbortController`，经 `ctx.signal` 贯穿 fetch 与 bash；TUI 空 Ctrl+C 或 Esc 在 busy 时 `abort()`；`finishInterrupted` 收尾
 - **权限**：工具直接执行，没有权限确认。不设确认钩子，也不弹 ask
-- **/compact**：messages 另发一次非流式请求求摘要 → `messages = [{role:"user", content: 摘要+接续指令}]`
-- **skills（F9）**：`buildSystemPrompt()` 时扫描 `~/.ti/skills/` 与 `.ti/skills/`，frontmatter 手写解析 name/description 两行（不引 yaml 库），清单注入系统提示词
-- **/provider（F10）**：复用 `resolveProvider()`，REPL 内列出/切换 provider；`/model` 收敛为只管模型名
+- **/compact**：messages 另发一次请求求摘要 → `messages = [{role:"user", content: 摘要+接续指令}]`
+- **skills**：`buildSystemPrompt()` 时扫描 `~/.ti/skills/` 与 `.ti/skills/`，frontmatter 手写解析 name/description 两行（不引 yaml 库），清单注入系统提示词
+- **/provider**：复用 `resolveProvider()`，REPL 内列出或切换 provider；`/model` 只管已写入的模型名
 
-### 6.2 npm 打包（方案 A：单文件直发，不构建）
+### 6.2 npm 打包
+
+开发直跑源码；发布打成一份 minify 的 `bin/ti.js`（hashbang 由构建写入）。
 
 ```jsonc
 {
   "name": "@tmjwjx/ti",
-  "bin": { "ti": "./src/main.ts" },     // src/main.ts 顶部加 #!/usr/bin/env node
-  "engines": { "node": ">=22.18.0" },   // type-stripping 免 flag 的最低版本
-  "files": ["src", "docs"],
+  "bin": { "ti": "bin/ti.js" },
+  "engines": { "node": ">=22.18.0" },
+  "files": ["bin"],
+  "scripts": {
+    "start": "node src/main.ts",
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run build"
+  },
   "license": "MIT"
 }
 ```
 
-发布流程（届时）：仓库转公开 → `npm login` → `npm publish --access public`（scoped 首次必须带）→ git tag。当前阶段只做到 `npm pack` + 全局安装自测。
+发布流程（届时）：仓库转公开 → `npm login` → `npm publish --access public`（scoped 首次必须带）→ git tag。当前已能 `npm pack` 或全局安装；打包还缺英文 README 与冒烟。
 
-### 6.3 目录结构（v1.0 目标）
+### 6.3 目录结构
 
 ```
-src/                # 分层源码（完整树与依赖规则见 DESIGN.md §2）
-  main.ts           # 唯一入口（hashbang、组合根装配、分发）
+src/                # 分层源码（完整树见 ARCHITECTURE.md；目标增量见 DESIGN.md §2）
+  main.ts           # 唯一入口（参数、向导、装配）
   types.ts          # 领域模型（纯类型）
-  cli/              # 接口层：repl.ts · render.ts · input.ts
-  core/             # 应用/领域层：agent.ts · session.ts · permissions.ts · prompt.ts · skills.ts
-  llm/              # LLM 协议适配：index.ts · sse.ts · anthropic.ts · openai.ts
-  tools/            # 工具适配：index.ts · read/write/edit/bash.ts · truncate.ts
-  config/           # 配置适配：paths.ts（~/.ti 路径 + TI_HOME 覆盖）· index.ts
-package.json        # bin→src/main.ts / engines / files / license
-README.md           # 英文优先 + 中文小节（面向 npm 页面）
+  cli/              # tui.ts · repl.ts · render.ts · keys.ts · form.ts · setup.ts
+  core/             # agent.ts · session.ts · prompt.ts
+  llm/              # index.ts · sse.ts · anthropic.ts · openai.ts
+  tools/            # index.ts · read/write/edit/bash.ts · truncate.ts
+  config/           # index.ts（CATALOG + settings.json）
+package.json        # bin→bin/ti.js / engines / files / license
+README.md           # npm 简介
 LICENSE(MIT)
-docs/               # PRD.md（本文档）· DESIGN.md · ARCHITECTURE.md
-scripts/smoke.mjs   # mock 冒烟测试（F8）
+docs/               # PRD.md（本文档）· DESIGN.md · ARCHITECTURE.md · READING.md · VERSIONS.md
+scripts/build.mjs   # 发布构建
 ```
+
+初版仍待加：`core/skills.ts`、`config/paths.ts`、`scripts/smoke.mjs`。不要把权限确认的 `permissions.ts`、`cli/input.ts` 当成交付。
 
 ## 7. 里程碑
 
-| 版本 | 内容 | 退出条件 |
-|---|---|---|
-| v0.1 ✅ | 核心 loop + 4 工具 + 双协议 + 配置（现状） | 已完成并验证 |
-| v0.2 | R0 拆分重构（单文件 → src/ 模块化，行为不变）+ F1 session + F2 中断 | 冒烟回归通过；杀进程可恢复；长任务可中断 |
-| v0.3 | F4 compact + F5 历史 + F6 token 累计 | 验收标准全过 |
-| v0.4 | F9 skills + F10 /provider | 验收标准全过 |
-| v1.0 | F7 打包就绪 + F8 冒烟测试 + 英文 README + 打磨 | `npm pack` 自测通过、`npm test` 全绿；**不发布** |
-| 发布决策点 | 用户确认后：仓库转公开 + `npm publish --access public` | 包可全局安装使用 |
-| v1.1+ | 4.3 候选功能按优先级迭代 | — |
+发版按 `0.0.x`，一个功能一个号。对照表在 `docs/VERSIONS.md`。
+
+初版目标见 §2：日常编码能在 ti 里跑完。待发功能齐了再把 `package.json` 打成 `1.0.0`。
+
+当前已落地：session（工作区未发）、中断、token 累计、`/provider`、TUI、打包主干。未做：`/compact`、输入历史、冒烟、skills、打包余项。权限确认不做。
 
 ## 8. 开放问题
 
-1. 仓库转公开的时机：v1.0 完成即转，还是发布 npm 时再转？（建议：发布时再转，转之前 README 配截图/GIF）
+1. 仓库转公开的时机：初版做完即转，还是发布 npm 时再转？（建议：发布时再转，转之前 README 配截图或 GIF）
 2. bin 命令名 `ti` 与既有 npm 包 `ti` 的二进制不冲突（scoped 包互不影响），但若用户机器上已全局装过那个包会撞 PATH——README 里注明即可
-3. 是否需要 GitHub Actions CI（跑 smoke 测试 + Node 22/24/26 矩阵）？建议 v1.0 后加，发布前必须有
+3. 是否需要 GitHub Actions CI（跑 smoke 测试 + Node 22/24/26 矩阵）？建议初版之后加，发布前必须有

@@ -1,54 +1,66 @@
-# ti v1.0 设计文档
+# ti 设计文档
 
-> 版本：v1.0 设计冻结稿 · 日期：2026-08-18 · 对应需求：`docs/PRD.md`（v1.0 范围已冻结）
-> 实现约束：模块化 `src/` 目录、零运行时依赖、Node ≥22.18、双协议（Anthropic / OpenAI 兼容）、免构建直发
+> 初版设计 · 日期：2026-08-18 · 2026-09-16 与当前实现对照 · 对应需求：`docs/PRD.md`
+> 实现约束：模块化 `src/`、零运行时依赖、Node ≥22.18、双协议（Anthropic / OpenAI 兼容）
+> 开发 `npm start` 直跑 TypeScript；发布 `scripts/build.mjs` 打成 `bin/ti.js`
+> 当前文件树以已存在的为准。标「未做」的是初版增量，不要当成已经落地。包号对照见 `docs/VERSIONS.md`
 
 ## 1. 设计原则
 
 1. **模块化单职责**：按层拆分，每个文件一个明确职责、可独立理解、可独立测试；不设行数硬指标，职责清晰为准
-2. **零依赖**：只用 Node 标准库（fs/path/os/readline/child_process/crypto）
+2. **零运行时依赖**：只用 Node 标准库（fs/path/os/readline/child_process）。发布用 esbuild 是 devDependency
 3. **协议无关内核**：循环层/工具层只面对自定义内部消息格式（`types.ts` 的消息联合）与 `ProviderConf`，新增功能不碰协议转换层
 4. **失败就地回灌**：工具失败转成 `isError` 的 toolResult 回灌模型。中断走 `finishInterrupted`（未配 toolCall 只 seal；否则 push `user("[interrupted]")`）。loop 不因这些失败崩溃
-5. **状态三处**：对话状态 = `messages[]`（内存）→ `~/.ti/sessions/*.jsonl`（持久化）；配置 = `~/.ti/settings.json`；输入历史 = `~/.ti/history`
-6. **免构建**：Node type-stripping 直接运行 `.ts`；相对 import 必须带 `.ts` 扩展名；只用可擦除语法（无 enum/namespace/参数属性）
+5. **状态**：当前对话是内存 `messages[]`，经 `pushMessage` 追加到 `<cwd>/.ti/sessions/*.jsonl`；配置 = `~/.ti/settings.json`；TUI 输入历史仅进程内。`~/.ti/history` 仍未做
+6. **开发免构建**：Node type-stripping 直接运行 `.ts`；相对 import 必须带 `.ts` 扩展名；只用可擦除语法（无 enum/namespace/参数属性）。发布另走 minify 打包
 7. **注释**：每个函数上方一两句中文说明功能/关键逻辑；复杂业务在步骤旁讲清为什么和分支。一眼能看懂的代码不堆注释。标识符英文，注释中文。
 
 ## 2. 文件架构
 
-分层思想借鉴干净架构与优秀开源 CLI（pi 的「核心运行时 × CLI 应用」分离、企业服务的接口/应用/领域/基础设施四层）：**接口层（cli/）→ 应用层（core/）→ 适配层（llm/ tools/ config/）**，依赖只能由外向内，内层不知道外层的存在。
+分层思想借鉴干净架构与优秀开源 CLI（pi 的「核心运行时 × CLI 应用」分离、Codex 的会话按项目隔离、企业服务的接口/应用/领域/基础设施四层）：**接口层（cli/）→ 应用层（core/）→ 适配层（llm/ tools/ config/）**，依赖只能由外向内，内层不知道外层的存在。
 
 ```
 ti/
 ├── package.json / README.md / LICENSE(MIT)
-├── docs/                     # PRD.md（需求）· DESIGN.md（本文档）· ARCHITECTURE.md
+├── docs/                     # PRD.md · DESIGN.md · ARCHITECTURE.md · READING.md
 ├── scripts/
-│   └── smoke.mjs             # F8 冒烟测试（内置双协议 mock server + 断言）
+│   └── build.mjs             # 发布：esbuild minify → bin/ti.js
 └── src/
-    ├── main.ts               # 唯一入口（薄）：hashbang、CLI 参数解析、装配、-c/--resume、REPL 分发
-    ├── types.ts              # 领域模型（纯类型）：Message 联合 / 内容块 / ProviderConf / Skill / SessionMeta…
-    ├── cli/                  # 接口层：终端交互适配（不被任何模块依赖）
-    │   ├── repl.ts           #   REPL 主循环、斜杠命令（/model /provider /compact /cost /clear）
-    │   ├── render.ts         #   终端渲染：ANSI 颜色、工具参数摘要、结果预览
-    │   └── input.ts          #   输入工具：readOneLine（权限提问）、历史持久化、多行续行
-    ├── core/                 # 应用/领域层：业务编排
-    │   ├── agent.ts          #   agentTurn 循环（组装者：llm × tools × permissions × session）
-    │   ├── session.ts        #   F1 会话持久化与恢复（JSONL、compact 标记）
-    │   ├── permissions.ts    #   F3 权限判定（auto/ask 模式、会话级放行集合）
-    │   ├── prompt.ts         #   系统提示词构建（AGENTS.md/CLAUDE.md + skills 清单注入）
-    │   └── skills.ts         #   F9 skills 扫描 + frontmatter 解析
-    ├── llm/                  # 适配层：LLM 协议（无状态，调用时传 ProviderConf）
-    │   ├── index.ts          #   callLLM() 协议分发 + LlmResult
-    │   ├── sse.ts            #   sseJson() 通用 SSE 帧解析（两协议共用）
-    │   ├── anthropic.ts      #   Anthropic Messages 协议（/v1/messages）
-    │   └── openai.ts         #   OpenAI 兼容协议（/chat/completions，收发边界格式转换）
-    ├── tools/                # 适配层：工具（无状态，一工具一文件，对齐 pi 的 tools/ 组织）
-    │   ├── index.ts          #   TOOLS schema 定义 + runTool() 分发
+    ├── main.ts               # 唯一入口：CLI 参数、向导、装配、REPL 分发
+    ├── types.ts              # 领域模型（纯类型）：Message 联合 / 内容块 / ProviderConf / StopReason
+    ├── cli/                  # 接口层：终端交互（不被任何模块依赖）
+    │   ├── tui.ts            #   TTY 主屏：视口、底栏、斜杠列表、setup 向导
+    │   ├── repl.ts           #   斜杠命令与一轮调度（/model /provider /setup /cost /clear /resume /rename /help /exit）
+    │   ├── render.ts         #   ANSI 颜色、工具参数摘要、结果预览
+    │   ├── keys.ts           #   按键名、CSI/SS3 拼键、isCharKey
+    │   ├── form.ts           #   全屏 select/input（非 TUI 兜底）
+    │   └── setup.ts          #   配置向导
+    ├── core/
+    │   ├── agent.ts          #   agentTurn（llm × tools）
+    │   ├── session.ts        #   当前目录 jsonl、pushMessage、list / resume / rename
+    │   └── prompt.ts         #   系统提示词（AGENTS.md/CLAUDE.md）
+    ├── llm/
+    │   ├── index.ts          #   callLLM() 协议分发
+    │   ├── sse.ts            #   sseJson() 通用 SSE 帧解析
+    │   ├── anthropic.ts      #   Anthropic Messages（/v1/messages）
+    │   └── openai.ts         #   OpenAI 兼容（/chat/completions）
+    ├── tools/
+    │   ├── index.ts          #   TOOLS schema + runTool()
     │   ├── read.ts / write.ts / edit.ts / bash.ts
-    │   └── truncate.ts       #   输出头部截断（2000 行 / 50KB）
-    └── config/               # 适配层：配置
-        ├── paths.ts          #   ~/.ti 路径集中管理（TI_HOME 环境变量可覆盖，冒烟测试隔离用）
-        └── index.ts          #   内置预设、settings.json 加载、resolveProvider()、当前 provider 状态
+    │   └── truncate.ts       #   头部截断（2000 行 / 50KB）
+    └── config/
+        └── index.ts          #   CATALOG、settings.json、resolveProvider()
 ```
+
+初版仍待加（不要当成已有文件）：
+
+```
+scripts/smoke.mjs             # 冒烟测试
+src/core/skills.ts            # skills
+src/config/paths.ts           # 测试隔离用 TI_HOME
+```
+
+`core/permissions.ts` 与 `cli/input.ts` 是权限确认的设计稿，产品已决定不做，不要实现。
 
 **依赖规则**（import 单向、无环）：
 
@@ -62,40 +74,86 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 
 务实说明：core 直接 import 适配层具体实现，不引入接口抽象/DI 容器——项目体量下 ports-and-adapters 全套是过度设计；规则的价值在于**依赖方向单一**，不在形式。
 
-**全局可变状态只住三处**：`config/index.ts`（当前 provider）、`core/session.ts`（当前会话写入器）、REPL（本轮 `AbortController`、`lastTurn`）。其余模块全部无状态，便于测试与替换。
+**全局可变状态**：`config/index.ts`（当前 provider）、REPL（本轮 `AbortController`、`lastTurn`）、`session.ts`（当前写入器）。其余模块全部无状态。
 
-**路径管理**：所有 `~/.ti` 下的路径（settings/sessions/history/skills）集中在 `config/paths.ts`，支持 `TI_HOME` 环境变量整体覆盖——冒烟测试（F8）用 `TI_HOME=/tmp/xxx` 做隔离，不再需要 Hack HOME。
+**路径**：当前 `SETTINGS_PATH` 写在 `config/index.ts`（`~/.ti/settings.json`）。冒烟测试需要隔离时再抽 `config/paths.ts`，用 `TI_HOME` 整体覆盖。
 
 ## 3. 功能详细设计
 
-### F1 · session 持久化与恢复
+### session 持久化与恢复（已落地 · 0.0.3）
 
-**存储格式**（`~/.ti/sessions/<时间戳>_<4位随机>.jsonl`，时间戳冒号转 `-` 保证文件名合法且可按名称排序）：
+#### 需求（已定）
+
+整段对话落盘（用户、模型、工具结果、token）。第一句用户输入才建文件。只要 `ti --resume` 与 `/resume`，没有 `-c`。`/clear` 留下旧文件，下一句开新文件。恢复时历史画回屏幕并提示条数。找不到或取消：提示，当新开，不退出。恢复后仍用当前 settings / CLI 的厂家；meta 只记录当时的厂家。会话按项目物理分开，A/B 互不可见。
+
+#### 存储
+
+```
+<cwd>/.ti/sessions/<首条用户句 slug>_<4hex>.jsonl
+```
+
+`cwd` 就是 `process.cwd()`。默认名字取首条用户句第一行：做成 slug（空白和 `/ \ : * ? " < > |` 换成 `-`，连续横杠收成一个，截到约 40 字）+ `_` + 4 位 hex。空句则只用 hex。meta 可带 `name`。`/rename 新名字` 写入 `name`，并把当前文件改成新 slug（hex 后缀保留），`writer.file` 一起改。列表优先显示 `name`，否则用首句。`.ti`、`sessions` 为 `0o700`，jsonl `0o600`。`listSessions` 按 mtime 倒序。settings 仍在 `~/.ti/settings.json`。
 
 ```jsonl
-{"type":"meta","version":1,"cwd":"/abs/path","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-08-18T08:30:00.000Z"}
+{"type":"meta","version":1,"cwd":"/Users/mac/proj/foo","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-09-16T12:00:00.000Z","name":"帮我改个登录bug"}
 {"type":"message","role":"user","content":"帮我改个 bug"}
-{"type":"message","role":"assistant","content":[...]}
-{"type":"compact","createdAt":"..."}              ← F4 压缩时写入的分隔标记
-{"type":"message","role":"user","content":"[摘要] ..."}
+{"type":"message","role":"assistant","content":[...],"stopReason":"stop","usage":{"input":100,"output":40}}
+{"type":"message","role":"toolResult","toolCallId":"...","toolName":"read","content":"...","isError":false}
+{"type":"compact","createdAt":"..."}
 ```
 
-**接口**：
+compact 行只预留：写入器有 `markCompact()`，读的时候只取最后一个 compact 之后。`/compact` 那一版再真正压缩。
+
+#### 模块（`src/core/session.ts`）
 
 ```ts
-interface SessionWriter { file: string; append(msg: Message): void; markCompact(): void; }
-function createSession(): SessionWriter            // 首条用户消息时才建文件（避免空 session）
-function loadSession(file: string): Message[]      // 逐行 JSON.parse，坏行跳过；
-                                                   // 遇最后一个 compact 标记，只取其后消息
-function listSessions(limit = 10): Array<{ file: string; meta: any; firstUserText: string; count: number }>
-function latestSessionFor(cwd: string): string | null  // 按文件名倒序找首个 meta.cwd 匹配的
+function sessionDir(): string                     // join(process.cwd(), ".ti/sessions")
+function createSession(): SessionWriter           // 写在 sessionDir()，先写 meta
+function openSession(file: string): SessionWriter
+function loadMessages(file: string): Message[]    // 坏行跳过；只取最后一个 compact 之后
+function listSessions(limit = 10): SessionInfo[]  // 只列 sessionDir()，mtime 倒序
+function pushMessage(messages, msg): void
+function popMessage(messages): void
+function bindSession(w): void
+function endSession(): void
+function sessionFile(): string | undefined
+function sessionName(): string | undefined
+function renameSession(name: string): string | undefined  // 改 meta.name + 文件名，返回新路径
 ```
 
-**写入时机**：模块级 `let session: SessionWriter | null`；所有 `messages.push(...)` 收敛为一个 `pushMessage(msg)` 辅助函数（REPL 输入、agentTurn 内 assistant/tool_result、compact 摘要都走它），内部同步 `session.append()`。追加写用 `appendFileSync`（每行一条、量小，同步写最简单可靠）。
+`SessionWriter`：`file` / `append` / `markCompact` / `dropLast`。模块级一个写入器。不提供 `latestSessionFor`。
 
-**恢复流程**：`-c/--continue` → `latestSessionFor(cwd)`；`--resume` → `listSessions()` 打印编号列表（时间、cwd、首条用户消息前 60 字、消息数），读序号选择。恢复后打印 `dim` 提示（恢复自哪个文件、多少条消息），然后正常进 REPL。找不到时打印提示并全新开始（不报错退出）。
+#### 写入
 
-### F2 · 中断
+REPL 用户句、agentTurn 里的 assistant / toolResult / `[interrupted]`，全部走 `pushMessage`：内存 push，没有写入器则 `createSession`，再 `appendFileSync` 一行。API 还没写出 assistant 就失败：`popMessage` 内存 pop + 文件 `dropLast`。
+
+#### 挑选（`--resume` 与 `/resume` 同一套）
+
+`listSessions(10)`。一项：时间、条数、首条用户前 48 字（cwd 已由目录隔开，标签里不写路径）。TTY + TUI：`tui.pick`。无 TUI 的 TTY：`form.select`。非 TTY：只打印列表，不当成选中。取消或这个目录没有会话：`no sessions in this directory`，保持现状。
+
+`ti --resume`：setup、定好 provider 之后、进 REPL 之前挑。选中则 `loadMessages` + `bindSession`，`resumed N messages from …`，把历史画回屏幕，再进 REPL。不切厂家。
+
+`/resume`：当前会话已在盘上。换一份：`messages` 就地换成载入的，`lastTurn` 清掉，TUI `clear` 后再画。选到正在写的那份：提示 already on this session。取消不动。
+
+`/clear`：清空 `messages`、`endSession()`、TUI 清屏。旧 jsonl 不动。
+
+#### 改哪些文件
+
+| 文件 | 改动 |
+|---|---|
+| `src/core/session.ts` | 新。`<cwd>/.ti/sessions`、jsonl、push/pop/list |
+| `src/core/agent.ts` | `messages.push` 改 `pushMessage` |
+| `src/cli/repl.ts` | 用户句 `pushMessage`；失败 `popMessage`；`/clear` 调 `endSession`；加 `/resume` `/rename` |
+| `src/cli/render.ts` | `replayMessages`：把历史画回屏幕 |
+| `src/main.ts` | `--resume`；help 文案 |
+| `package.json` | `0.0.3` |
+| README / PRD / DESIGN / ARCHITECTURE / READING | 进度已改成已落地 |
+
+#### 本版不做
+
+`-c` / `--continue`、启动自动续、跨目录总表、`/resume all`、恢复时切厂家、金额、真 compact、往上找 git 根、`~/.ti/sessions` 编码目录。
+
+### 中断（已落地）
 
 **机制**：REPL 每轮聊天建一个 `AbortController`，经 `ctx.signal` 贯穿 `agentTurn`：
 
@@ -116,7 +174,7 @@ function latestSessionFor(cwd: string): string | null  // 按文件名倒序找�
 
 **触发（TUI）**：没有 Ctrl+D。退出和打断只走 Ctrl+C：有字清空 → 向导取消 → busy 打断 → 空闲退出。Esc：向导取消 → 二级列表往回退 → busy 打断（不丢队列）→ 清空。`/exit` 退出。非 TTY readline 仍是空闲 Ctrl+C 退出。AbortSignal 贯穿 `fetch` 与 bash。
 
-### F3 · 权限（设计稿，未交付）
+### 权限确认（设计稿，不做）
 
 产品决定：工具直接执行，没有权限确认。下面是一份可选的 ask 方案草稿，不是当前行为，也不是默认要确认。
 
@@ -137,7 +195,7 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 
 **拒绝处理**：`deny` → 不执行，结果为 `is_error:true, "Permission denied by user"` 回灌（模型据此换方案）。`a` 放行的工具名存模块级 `Set<string>`，仅本会话有效。
 
-### F4 · /compact
+### /compact（未做）
 
 **触发**：REPL `/compact`；`messages.length < 10` → 提示「历史太短，无需压缩」。
 
@@ -148,19 +206,19 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 3. `session.markCompact()` 写分隔标记 → `messages = [{role:"user", content: "[此前对话摘要]\n" + summary + "\n请基于摘要继续。"}]` → 作为新消息追加进 session
 4. 打印压缩前后消息条数
 
-恢复时 `loadSession` 只取最后一个 compact 标记之后的消息（见 F1），压缩效果跨进程保留。
+恢复时 `loadMessages` 只取最后一个 compact 标记之后的消息（见 session 一节），压缩效果跨进程保留。
 
-### F5 · 输入体验
+### 输入体验（未做）
 
 **历史持久化**：启动读 `~/.ti/history`（不存在则空），按 readline 约定**最新在前**反转后传 `createInterface({ history, historySize: 1000 })`；每接受一条非空非 `/` 命令的输入，`appendFileSync` 追加一行；文件超 1000 行时启动读取阶段截断（取最后 1000 行）。连续重复行不重复写入。
 
 **多行输入**：REPL 循环里，若行以 `\` 结尾 → 去掉 `\`，继续读下一行拼接（提示符变为 `... `），直到不以 `\` 结尾再提交。与 for-await 天然兼容。
 
-### F6 · token 累计与 /cost
+### token 累计与 /cost（已落地）
 
-模块级 `const totals = { input: 0, output: 0, turns: 0 }`；`agentTurn` 每轮累加 `res.usage`。REPL `/cost` 打印：`session: 12,345 in / 6,789 out · 8 turns`。不含金额（v1.1 再做价格表）。
+从 `messages` 里 assistant 的 `usage` 求和（`tokenTotals`），不另维护一份累计器。`lastTurn` 是最近一次 `agentTurn` 的差值。`/cost` 打印：`session  12,345 in · 6,789 out · 8 calls · last turn …`。footer 用 `turn ↑↓` / `session ↑↓`。不含金额（v1.1 再做价格表）。
 
-### F9 · skills
+### skills（未做）
 
 **扫描**：`buildSystemPrompt()` 内同步扫描 `~/.ti/skills/*/SKILL.md` 与 `<cwd>/.ti/skills/*/SKILL.md`（`readdirSync` + `existsSync`，失败静默跳过）。
 
@@ -173,49 +231,48 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 - commit-helper: 生成规范 commit message (~/.ti/skills/commit-helper/SKILL.md)
 ```
 
-### F10 · /provider 命令
+### /provider 命令（已落地）
 
-- `/provider`（无参）→ 列出内置预设 + `settings.providers` 自定义项，每项一行：`名称  protocol  baseURL  model`，当前项前缀 `*`
-- `/provider <name>` → `provider = resolveProvider(name)`；失败（未知名字/缺 key）打印错误、保持当前不变
-- **`/model` 行为收敛**（破坏性变更，README 注明）：`/model` 只查看/切换当前 provider 下的模型名；原来的「参数是 provider 名则切 provider」分支删除，由 `/provider` 接管
+- `/provider`（无参）→ TUI 展开二级列表；非 TTY 列已就绪厂家，当前项前缀 `*`
+- `/provider <name>` → `resolveProvider(name)`；失败打印错误、保持当前不变
+- `/model` 只切当前厂家已写入的模型 id；未知 id 提示走 `/setup`，不随口写进 settings
 
-## 4. 打包与发布设计（F7）
+## 4. 打包与发布（部分落地）
 
-- `src/main.ts` 第一行加 `#!/usr/bin/env node`（必须位于文件头注释之前）
-- `package.json`：
+现状已按此落地。hashbang 写在构建产物上，不写在 `src/main.ts`。
 
 ```jsonc
 {
   "name": "@tmjwjx/ti",
-  "version": "0.2.0",                 // 跟随里程碑，v1.0 时升 1.0.0
-  "description": "Minimal coding agent modeled after pi. 极简 coding agent（零依赖、免构建）",
+  "version": "0.0.3",
+  "description": "A coding agent for the terminal",
   "type": "module",
-  "bin": { "ti": "./src/main.ts" },   // npm 为 bin 建 shim/symlink，node 直接跑 .ts
-  "engines": { "node": ">=22.18.0" }, // type-stripping 免 flag 最低版本
-  "files": ["src", "docs"],
-  "scripts": { "start": "node src/main.ts", "test": "node scripts/smoke.mjs" },
-  "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/tmjwjx/ti.git" },
-  "keywords": ["coding-agent", "llm", "cli", "deepseek", "anthropic"]
+  "bin": { "ti": "bin/ti.js" },
+  "files": ["bin"],
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "start": "node src/main.ts",
+    "build": "node scripts/build.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "license": "MIT"
 }
 ```
 
-- 新增 `LICENSE`（MIT，copyright tmjwjx）；README 在 v1.0 里程碑改为英文优先 + 中文小节
-- 验收：`npm pack --dry-run` 仅含白名单文件且 <100KB；`npm i -g .` 后 `ti --help`、`ti` 冒烟可用；**不执行 publish**
+`scripts/build.mjs`：esbuild bundle + minify → `bin/ti.js`，`banner` 加 `#!/usr/bin/env node`，无 sourcemap。`LICENSE` 已在仓库。仍缺：`npm test` / 英文优先 README。验收仍是 `npm pack --dry-run` 仅含白名单且 <100KB；**不执行 publish**。
 
-## 5. 测试设计（F8）
+## 5. 冒烟测试（未做）
 
-`scripts/smoke.mjs`：零依赖，内置两个 mock server（OpenAI 协议 + Anthropic 协议，罐头 SSE），用 `child_process` 起 `agent.ts` 子进程并断言 stdout/退出码。场景矩阵：
+`scripts/smoke.mjs`（未做）：零依赖，内置两个 mock server（OpenAI 协议 + Anthropic 协议，罐头 SSE），用 `child_process` 起 `src/main.ts` 子进程并断言 stdout/退出码。场景矩阵：
 
 | # | 场景 | 环境 | 断言 |
 |---|---|---|---|
 | S1 | OpenAI 协议全链路 | settings.json 的 baseURL 指 mock + 假 key | 输出含 mock 工具结果；mock 侧角色序列 `system→user→assistant+tool_calls→tool` |
 | S2 | Anthropic 协议全链路 | settings.json 的 baseURL 指 mock | 同上（content_block 事件流） |
-| S3 | 配置优先级 | HOME 隔离 + settings.json vs CLI | 实际请求的 baseURL/key 符合 CLI > 文件 > 预设 |
+| S3 | 配置优先级 | HOME 隔离 + settings.json vs CLI | 实际请求的 baseURL/key 符合 CLI > 文件已写字段 > CATALOG |
 | S4 | `/model`、`/provider` | 管道输入命令序列 | 输出包含切换后的 provider:model |
-| S5 | session 恢复 | 跑一轮 → `-c` 再起 | 第二轮请求 messages 含第一轮历史 |
-| S6 | 权限 ask 模式拒绝 | `--ask` + 管道（非 TTY） | 工具被拒、输出含权限提示 |
-| S7 | /compact | mock 第二轮返回摘要 | messages 被重置为摘要消息 |
+| S5 | session 恢复 | 跑一轮 → `--resume` 再起 | 第二轮请求 messages 含第一轮历史 |
+| S6 | /compact | mock 第二轮返回摘要 | messages 被重置为摘要消息 |
 
 任一断言失败 → 非零退出并打印失败项；全过打印绿字汇总。
 
@@ -223,20 +280,15 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 
 | 风险/取舍 | 决策 |
 |---|---|
-| 模块化拆分引入 import 管理成本 | 约定依赖方向（§2 规则）+ 纯类型/无状态模块为主；拆分本身作为 v0.2 的第一步独立提交（行为不变的纯搬迁，冒烟回归） |
-| Ctrl+C 语义改变（REPL 内从「退出」变「中断 turn」） | 空闲时仍退出；启动横幅注明 |
-| 权限提问与 for-await 主循环的 stdin 竞争 | readOneLine 直接读 stdin、不建第二 rl 实例；非 TTY 一律 deny |
-| session 文件无锁/无压缩 | 单用户单进程工具，线性追加足够；pi 同样从简 |
+| 模块化拆分引入 import 管理成本 | 约定依赖方向（§2 规则）+ 纯类型、无状态模块为主 |
+| Ctrl+C 语义改变（REPL 内从「退出」变「中断 turn」） | 空闲时仍退出；忙时 footer 写 `esc interrupt` |
+| 权限提问与 for-await 主循环的 stdin 竞争 | 已决定不做权限确认；设计稿留在上面，不要实现 |
+| session 文件无锁、无压缩 | 单用户单进程工具，线性追加足够；pi 同样从简 |
 | compact 用当前 provider 模型 | 不引入额外「小模型」配置，行为可预期 |
-| F2 TUI 用 Esc 打断 | 空闲退出仍是空输入 Ctrl+C / `/exit`；没有 Ctrl+D |
+| TUI 用 Esc 打断 | 空闲退出仍是空输入 Ctrl+C 或 `/exit`；没有 Ctrl+D |
 
-## 7. 实施顺序（对应 PRD 里程碑）
+## 7. 实施顺序
 
-| 里程碑 | 内容 | 依赖 |
-|---|---|---|
-| v0.2 | **R0 拆分重构**（单文件 → §2 的 src/ 结构，行为不变、冒烟回归）→ F1 session + F2 中断 | F1 的 pushMessage 收敛先行；F2 依赖 F1 的协议合法性设计 |
-| v0.3 | F3 无权限确认（工具直接执行）+ F4 compact + F5 历史、多行 + F6 token 累计 | F4 依赖 F1 的 compact 标记；F3 无实现项 |
-| v0.4 | F9 skills + F10 /provider | 只动系统提示词与 REPL，互不依赖 |
-| v1.0 | F7 打包 + F8 冒烟测试 + 英文 README + 打磨 | F8 覆盖 v0.2-v0.4 全部场景 |
+按 `docs/VERSIONS.md` 的包号走，一个功能一个 `0.0.x`。`/compact` 依赖 session 已留下的 `markCompact` 和读时切口；其余待发项互不挡。
 
-每个里程碑：实现 → 按 PRD 验收标准实测 → 双语 commit → 推私有仓库。
+每个小版本：需求 → 实现方案点头 → 开发 → CR → 按 PRD 验收 → commit → 再决定 `npm publish`。

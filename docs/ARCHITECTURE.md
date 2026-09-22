@@ -1,153 +1,190 @@
 # ti 架构文档
 
-> **注意**：本文档记录的是 v0.1 单文件版（`agent.ts`，已删除）的架构。
-> 当前实现已按 `docs/DESIGN.md` §2 拆分为 `src/` 四层模块化结构（行为不变）；
-> 分层思想不变，本文将在 v1.0 里程碑按新结构重写。
+当前实现（`src/` 四层）。需求与未做项以 `docs/PRD.md`、`docs/DESIGN.md` 为准。
 
-单文件极简 coding agent，架构参考 [pi](https://github.com/badlogic/pi-mono)（现 earendil-works/pi）。
-零 npm 依赖，Node ≥ 22.18 直接运行。
+零运行时依赖。开发：`npm start` 直接跑 TypeScript。发布：`scripts/build.mjs` 打成 `bin/ti.js`。
 
 ## 总体分层
 
+接口层（`cli/`）→ 应用层（`core/`）→ 适配层（`llm/` `tools/` `config/`）。依赖由外向内；`main.ts` 是唯一装配点。
+
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                              agent.ts                              │
+│  main.ts   扫 argv → TTY 则 openTui → maybeSetup → setProvider → [--resume] → repl │
 │                                                                    │
-│  配置层    CLI > ~/.ti/settings.json > 预设（不采用 env 值）         │
-│              resolveProvider() → { protocol, baseURL, model, key } │
-│              预设：deepseek(默认 flash，含 pro) / anthropic         │
+│  配置    CATALOG + ~/.ti/settings.json                             │
+│            CLI > 文件里写了的字段 > 目录托底（不读 env 值）           │
+│            --provider 失败即退出，不回退、不丢给向导                  │
 │                                                                    │
-│  交互层    REPL (readline 异步迭代)                                 │
+│  交互    TTY：TUI（底栏编辑、斜杠列表、setup 向导）                   │
+│          非 TTY：readline 管道 REPL                                 │
 │                             │                                      │
 │                             ▼                                      │
-│  循环层    agentTurn(messages)   ←—— 唯一状态：messages[] 数组      │
-│              │  流式请求 → 执行工具 → 结果回灌 → 循环               │
+│  循环    agentTurn(messages)   状态就是 messages[]                  │
+│            进出数组一律 pushMessage / popMessage（顺手落盘）         │
+│            流式请求 → 完整 toolCall 才执行 → 结果回灌 → 循环         │
+│            AbortSignal 贯穿 fetch 与 bash；中断走 finishInterrupted │
 │              ▼                                                     │
-│  传输层    callLLM() 协议分发 ── 共用 sseJson() SSE 帧解析          │
-│              ├─ callAnthropic() ─▶ /v1/messages (官方/Kimi 等)     │
-│              └─ callOpenAI()    ─▶ /chat/completions (DeepSeek 等) │
-│                   收发边界做格式转换，内部统一为 Block[]             │
-│              │  onText 增量回调 ───────────────▶ stdout 实时显示    │
+│  传输    callLLM() ── sseJson()                                    │
+│            ├─ Anthropic  /v1/messages                              │
+│            └─ OpenAI     /chat/completions                         │
+│            收发边界翻译；内部是 types.ts 的 Message 联合              │
 │              ▼                                                     │
-│  工具层    runTool(name, input)                                    │
-│              ├─ read   带行号读文件（offset/limit 分页）            │
-│              ├─ write  创建/覆盖文件（自动建父目录）                │
-│              ├─ edit   精确替换（oldText 唯一性校验）               │
-│              └─ bash   shell 执行（超时/截断/退出码）               │
+│  工具    runTool()                                                 │
+│            read / write / edit / bash                              │
 └──────────────────────────────┬─────────────────────────────────────┘
                                ▼
                      本地文件系统 / 系统 shell
 ```
 
-## 核心：agent 主循环
+## 源码树
 
-整个 agent 的**唯一状态是 `messages` 数组**（对话历史）。每轮用户输入触发如下循环，
-直到模型响应中不再包含工具调用：
+```
+src/
+  main.ts            入口：参数、向导、装配
+  types.ts           内部消息与 ProviderConf（纯类型）
+  cli/
+    tui.ts           TTY 主屏
+    repl.ts          斜杠命令与一轮调度
+    render.ts        颜色、工具摘要、AgentUI
+    keys.ts          按键名、CSI/SS3 拼键
+    form.ts          全屏 select/input（非 TUI 兜底）
+    setup.ts         配置向导
+  core/
+    agent.ts         agentTurn
+    session.ts       当前目录 jsonl、pushMessage、list / resume / rename
+    prompt.ts        系统提示词（AGENTS.md / CLAUDE.md）
+  llm/
+    index.ts         协议分发
+    sse.ts           SSE 帧
+    anthropic.ts     Messages 协议
+    openai.ts        chat/completions 兼容
+  tools/
+    index.ts         TOOLS + runTool
+    read.ts / write.ts / edit.ts / bash.ts
+    truncate.ts      2000 行 / 50KB
+  config/
+    index.ts         CATALOG、settings、resolveProvider
+```
+
+尚未落地（见 DESIGN.md）：`skills.ts`、`paths.ts`、历史落盘、冒烟测试。`permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。
+
+## 启动
 
 ```mermaid
 flowchart TD
-    A[用户输入] --> B["push {role:user} 到 messages"]
-    B --> C["callLLM: POST /v1/messages (stream:true)"]
-    C -->|text_delta| P[实时打印到终端]
-    C --> D{响应中含 tool_use?}
-    D -- 否 --> E[本轮结束, 等待下次输入]
-    D -- 是 --> F{"stop_reason == max_tokens?"}
-    F -- 是 --> G["不执行! 全部以错误回灌<br/>(参数可能被截断)"]
-    F -- 否 --> H["顺序执行 runTool(name, input)"]
-    H --> I["终端打印前 5 行预览"]
-    G --> J
-    I --> J["push {role:user, content:[tool_result]} 到 messages"]
-    J --> C
-    K{"turn >= 100"} -.保险丝.-> E
+    A[main 扫 argv] --> B{TTY?}
+    B -- 是 --> C[openTui]
+    B -- 否 --> D[maybeSetup 无 TUI]
+    C --> E[maybeSetup 底栏向导]
+    E --> F[resolveProvider]
+    D --> F
+    F -->|失败| G[报错退出]
+    F -->|成功| H[buildSystemPrompt]
+    H --> R{--resume?}
+    R -- 是 --> S[pickAndResume]
+    R -- 否 --> I
+    S --> I{有 TUI?}
+    I -- 是 --> J[repl + TUI]
+    I -- 否 --> K[repl + readline]
 ```
 
-## 一次典型请求的时序
+- `ti setup`：强制向导。取消时，本来就能用则退出码 0，否则 1
+- `--provider name`：只解析这个名字；失败退出，不回退 `settings.provider`
+- `-m / --model`：只影响本进程，不写回 settings
+- `--resume`：setup 与 provider 定完之后挑当前目录的一份会话；取消或没有则新开，不退出。不切厂家
+
+## 核心：agent 主循环
+
+唯一对话状态是 `messages[]`，进出都走 `pushMessage` / `popMessage`（内存 + `<cwd>/.ti/sessions/*.jsonl`）。每轮用户输入触发循环，直到模型不再给出可执行的工具调用、流失败、中断或超过 `MAX_TURNS`（100）。
 
 ```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant R as REPL
-    participant L as agentTurn
-    participant A as LLM API
-    participant T as runTool
-    participant F as 文件系统/shell
-
-    U->>R: "创建 hello.txt 并 cat 验证"
-    R->>L: messages.push(user 消息)
-    loop 直到无工具调用
-        L->>A: 流式请求 (system + tools + messages)
-        A-->>L: text_delta → 实时打印
-        A-->>L: content_block: tool_use(write)
-        L->>T: runTool("write", {path, content})
-        T->>F: mkdir + writeFile
-        F-->>T: ok
-        T-->>L: "wrote 11 bytes to hello.txt"
-        L->>L: push tool_result → 继续循环
-        A-->>L: tool_use(bash cat hello.txt)
-        L->>T: runTool("bash", {command})
-        T->>F: spawn(shell:true)
-        F-->>T: "hello world"
-        T-->>L: 输出 + 退出码
-        L->>L: push tool_result → 继续循环
-        A-->>L: text: "已完成..."（无 tool_use）
-    end
-    L-->>R: 循环结束
-    R->>U: "> " 等待下一条输入
+flowchart TD
+    A[push user] --> B{signal.aborted?}
+    B -- 是 --> Z[finishInterrupted]
+    B -- 否 --> C[callLLM]
+    C -->|零字节 AbortError| Z
+    C --> D{aborted?}
+    D -- 是 --> E[收下半截 assistant]
+    E --> Z
+    D -- 否 --> F{incomplete 或 badArgs?}
+    F -- 是 --> G[seal 真实原因 / 停轮]
+    F -- 否 --> H{stop 且无字无工具?}
+    H -- 是 --> I[不写空 assistant / 结束]
+    H -- 否 --> J{有完整 toolCall?}
+    J -- 否 --> K[结束]
+    J -- 是 --> L{该执行? toolUse 或 stop}
+    L -- 否 --> M[seal 截断错误]
+    M --> N{连续 3 次?}
+    N -- 是 --> O[停轮]
+    N -- 否 --> C
+    L -- 是 --> P[顺序 runTool]
+    P --> Q{aborted?}
+    Q -- 是 --> Z
+    Q -- 否 --> C
 ```
 
-## 状态演化示例（messages 数组）
+**中断收尾** `finishInterrupted`（屏幕只打一次 `[interrupted]`）：
 
-`messages` 是唯一状态，也是发送给 API 的完整上下文。一次「写文件并验证」后：
+- 栈尾有未配 toolCall：只 `sealTools("Error: aborted by user")`，不再追加 interrupted user（否则下一轮协议 400）
+- 否则：留下已有内容，再 `push user("[interrupted]")`
+
+**流失败**：`stopReason` 未收到线上结束原因 → `incomplete`；说完或正式 tool 结束但参数解不开 → `badArgs`。这两种不跑半截工具，seal 后停轮。
+
+**截断**：`length` 不执行工具；补错误结果再让模型重发，连续 3 次停轮。
+
+工具失败转成 `isError` 的 `toolResult` 回灌，loop 不崩。
+
+## 内部消息
+
+协议线格式只在 `llm/` 翻译。内存里是：
 
 ```jsonc
 [
   { "role": "user", "content": "创建 hello.txt 并 cat 验证" },
   { "role": "assistant", "content": [
-      { "type": "tool_use", "id": "toolu_1", "name": "write",
-        "input": { "path": "hello.txt", "content": "hello world" } }
-  ]},
-  { "role": "user", "content": [
-      { "type": "tool_result", "tool_use_id": "toolu_1", "content": "wrote 11 bytes..." }
-  ]},
+      { "type": "toolCall", "id": "call_1", "name": "write",
+        "arguments": { "path": "hello.txt", "content": "hello world" } }
+    ], "stopReason": "toolUse", "usage": { "input": 100, "output": 40 } },
+  { "role": "toolResult", "toolCallId": "call_1", "toolName": "write",
+    "content": "wrote 11 bytes to hello.txt", "isError": false },
   { "role": "assistant", "content": [
-      { "type": "tool_use", "id": "toolu_2", "name": "bash", "input": { "command": "cat hello.txt" } }
-  ]},
-  { "role": "user", "content": [
-      { "type": "tool_result", "tool_use_id": "toolu_2", "content": "hello world" }
-  ]},
-  { "role": "assistant", "content": [
-      { "type": "text", "text": "已完成：hello.txt 内容为 hello world" }
-  ]}  // 无 tool_use → 循环结束
+      { "type": "text", "text": "已完成" }
+    ], "stopReason": "stop", "usage": { "input": 160, "output": 20 } }
 ]
 ```
 
-要点：tool_result 以 `role:"user"` 消息回灌（Anthropic 协议约定）；`tool_use_id`
-把结果关联回对应的调用；`is_error:true` 让模型知道失败并自我纠正。
+Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 合成一条（角色必须交替）。OpenAI `toWire`：`toolResult` 1:1 成 `role:"tool"`；system 单独一条。
 
-## agent.ts 区块 ↔ pi 源码对应关系
+## 配置
 
-| agent.ts 区块 | pi 源码位置 | 简化说明 |
-|---|---|---|
-| `agentTurn()` | `packages/agent/src/agent-loop.ts` | pi 还有 steering 消息、并行/顺序双模式、事件总线；这里只保留顺序执行主干 |
-| `TOOLS` + `runTool()` | `packages/coding-agent/src/core/tools/{read,write,edit,bash}.ts` | 参数 schema 与描述逐一对齐；去掉 TUI 渲染与可插拔 operations |
-| `truncate()` | `core/tools/truncate.ts` | 同样的头部截断：2000 行 / 50KB |
-| `buildSystemPrompt()` | `core/system-prompt.ts` | 同样 <1k tokens；同样加载 AGENTS.md/CLAUDE.md 作为 project_context |
-| `callLLM()` → `callAnthropic()` / `callOpenAI()` | `packages/ai`（多 provider 统一流式层） | 双协议（Anthropic Messages / OpenAI chat completions），收发边界做格式转换、内部统一 `Block[]`，共用 `sseJson()` 帧解析 |
-| `resolveProvider()` + `~/.ti/settings.json` | `~/.pi/agent/`（settings.json + auth.json + models.json） | CLI > 配置文件 > 预设；不采用环境变量的值 |
-| `repl()` | `packages/tui` + modes/interactive | pi 是完整 TUI（差分渲染、编辑器组件）；这里是 readline + `/model` `/clear` 斜杠命令 |
+`CATALOG` 写死 deepseek / kimi / glm 的协议与地址。setup 给这三家只写 `apiKey` 与模型，不写 protocol/baseURL。
 
-## 关键保护机制
+`~/.ti/settings.json`：`saveSettings` 目录 `0o700`、文件 `0o600`（chmod 失败忽略）。不读环境变量的值。
+
+`listProviderNames()` 只列能 `resolveProvider` 的（没 key 的不出现）。`/model` 只切已写入的模型 id。
+
+## 交互
+
+**TUI**（TTY）：底栏常开。`/` 出命令列表，`/model` `/provider` 二级。Enter 在模型忙碌时进队列，等本轮结束再发。Ctrl+C：有字清空 → 向导取消 → busy 打断 → 空闲退出。Esc：向导取消 → 二级往回退 → busy 打断（不丢队列）→ 清空。没有 Ctrl+D。重绘：行级 diff + CSI 2026。
+
+**readline**（非 TTY）：`> ` 提示，斜杠命令同一套 `dispatch`。没有 AbortController，空闲 Ctrl+C 随 readline 结束。
+
+斜杠：`/clear` `/resume` `/rename` `/model` `/provider` `/setup` `/cost` `/help` `/exit`。未知 `/xxx` 不当用户消息发给模型。会话按项目落在 `<cwd>/.ti/sessions/`，`--resume` 与 `/resume` 共用 `pickAndResume()`。
+
+## 关键保护
 
 | 机制 | 位置 | 作用 |
 |---|---|---|
-| max_tokens 保护 | `agentTurn()` | 被截断响应中的工具调用不执行，报错回灌让模型重发完整调用 |
-| edit 全量预校验 | `runTool()` edit 分支 | 所有 oldText 先在原文件校验唯一性，全部通过才应用，杜绝半成品文件 |
-| 错误回灌 | `agentTurn()` | 工具异常 → `is_error:true` 的 tool_result，模型据此自愈而非崩溃 |
-| MAX_TURNS=100 | `agentTurn()` | 死循环保险丝 |
-| 输出截断 | `truncate()` | 防止大文件/长跑命令输出撑爆上下文 |
-| readline 异步迭代 | `repl()` | 管道输入不丢行、不抛 `ERR_USE_AFTER_CLOSE` |
+| 流失败停轮 | `agentTurn` | `incomplete` / `badArgs` 不跑半截工具 |
+| max_tokens | `agentTurn` | `length` 不执行，seal 后最多再试 3 次 |
+| 中断收尾 | `finishInterrupted` | 未配 toolCall 先补结果，协议合法 |
+| bash 可杀 | `bash.ts` | abort → SIGTERM，2s 后 SIGKILL |
+| edit 原文定位 | `edit.ts` | 多条对着同一份原文 `indexOf`，区间不重叠，倒序写回 |
+| MAX_TURNS=100 | `agentTurn` | 死循环保险丝 |
+| 输出截断 | `truncate` | 2000 行 / 50KB |
+| `--provider` | `main.ts` | 名字不对或缺 key 直接退出 |
 
-## 有意省略（pi 有、本项目超出行数预算）
+## 有意未做
 
-扩展系统、skills、MCP、权限弹窗、plan mode、子 agent、session 持久化、
-thinking 块、并行工具执行、TUI。
+`-c` / `--continue`、`/compact`、skills、历史落盘、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。
