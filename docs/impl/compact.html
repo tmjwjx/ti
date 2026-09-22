@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0.0.4 压缩已接上</title>
+<style>
+  :root {
+    --bg: #f3f1eb;
+    --card: #fffdf8;
+    --ink: #1c1915;
+    --muted: #6f685f;
+    --line: #e2dcd0;
+    --seal: #7a3b2e;
+    --ok: #245c45;
+    --ok-bg: #e5f2eb;
+    --warn: #8a5a12;
+    --warn-bg: #f8efd6;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+    --serif: "Songti SC", "STSong", serif;
+    --mono: "SF Mono", Menlo, ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  main { max-width: 40rem; margin: 0 auto; padding: 2.4rem 1.25rem 3.5rem; }
+  .kicker { margin: 0; color: var(--seal); font-size: 0.75rem; letter-spacing: 0.16em; }
+  h1 { margin: 0.4rem 0 0; font-family: var(--serif); font-size: 2rem; font-weight: 600; line-height: 1.25; }
+  .lead {
+    margin: 1rem 0 0;
+    padding: 0.75rem 0.9rem;
+    background: var(--card);
+    border-left: 3px solid var(--seal);
+  }
+  .nums {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+    margin: 1.1rem 0 0;
+  }
+  .nums div { padding: 0.7rem 0.55rem; background: var(--card); border: 1px solid var(--line); }
+  .nums b { display: block; font-family: var(--serif); font-size: 1.25rem; line-height: 1.15; }
+  .nums span { color: var(--muted); font-size: 0.75rem; }
+  section { margin-top: 1.8rem; }
+  h2 { margin: 0 0 0.7rem; font-family: var(--serif); font-size: 1.2rem; }
+  .chain { display: flex; align-items: stretch; gap: 0.35rem; }
+  .chain article { flex: 1; padding: 0.7rem; background: var(--card); border: 1px solid var(--line); }
+  .chain em { display: block; color: var(--muted); font-style: normal; font-size: 0.72rem; letter-spacing: 0.08em; }
+  .chain strong { display: block; margin-top: 0.2rem; }
+  .chain i { align-self: center; color: var(--muted); font-style: normal; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); font-size: 0.92rem; }
+  th, td { padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-size: 0.75rem; font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  code { font-family: var(--mono); font-size: 0.84em; }
+  .note { margin-top: 0.7rem; padding: 0.7rem 0.85rem; background: var(--warn-bg); border-left: 3px solid var(--warn); }
+  .note b { display: block; color: var(--warn); font-size: 0.75rem; letter-spacing: 0.06em; }
+  .note p { margin: 0.2rem 0 0; }
+  .ok { margin-top: 0.7rem; padding: 0.7rem 0.85rem; background: var(--ok-bg); border-left: 3px solid var(--ok); }
+  .ok b { color: var(--ok); }
+  @media (max-width: 640px) {
+    .nums, .chain { display: block; }
+    .nums div, .chain article { margin-bottom: 0.4rem; }
+    .chain i { display: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">0.0.4 · 开发汇报</p>
+  <h1>上下文压缩已经接上</h1>
+  <p class="lead">手动 <code>/compact</code>、发请求前自动压、模型报超限后再压一次重试。三处都进同一个 <code>runCompact</code>。屏幕只多一行 token 变化，不清屏。</p>
+  <div class="nums">
+    <div><b>20 万</b><span>1M 窗口的触发线</span></div>
+    <div><b>4 万</b><span>1M 窗口压完留下</span></div>
+    <div><b>1 次</b><span>超限后整轮重试</span></div>
+    <div><b>8</b><span>摘要固定段数</span></div>
+  </div>
+
+  <section>
+    <h2>一轮里怎么走</h2>
+    <div class="chain">
+      <article><em>01</em><strong>先看用量</strong>上一条有效回复超过阈值，就先压，再写入你这句。</article>
+      <i>→</i>
+      <article><em>02</em><strong>正常去问模型</strong>摘要失败不拦这一轮，只提示跳过。</article>
+      <i>→</i>
+      <article><em>03</em><strong>超限再救一次</strong>认出 400 超限就压完重进这一轮。再撞就报错。</article>
+    </div>
+  </section>
+
+  <section>
+    <h2>改了哪里</h2>
+    <table>
+      <thead><tr><th>文件</th><th>做了什么</th></tr></thead>
+      <tbody>
+        <tr><td><code>core/compact.ts</code></td><td>新建。估算、切点、摘要、换内存</td></tr>
+        <tr><td><code>cli/repl.ts</code></td><td><code>/compact</code>、自动检查、超限重试、用量结转</td></tr>
+        <tr><td><code>config</code> / <code>types</code></td><td>模型窗口。四家 100 万，flash 没写</td></tr>
+        <tr><td><code>llm/*</code></td><td>超限识别；空工具不发字段；缓存 token 计入用量</td></tr>
+        <tr><td><code>core/session.ts</code></td><td>补了 <code>commitCompact</code>，才能写分隔和保留段</td></tr>
+      </tbody>
+    </table>
+    <div class="ok"><b>切点和超限判断已用脚本对过。</b> 1M 触发 20 万、保留 4 万；128K 触发 102,400、保留 20,480。工具结果不会被切成保留段的开头。</div>
+  </section>
+
+  <section>
+    <h2>跳过和偏差</h2>
+    <div class="note">
+      <b>文档写 session.ts 不改，实际加了一个函数</b>
+      <p><code>markCompact</code> 原来没有出口。不加 <code>commitCompact</code>，分隔和保留段写不进文件，恢复时会只剩摘要。格式没变。</p>
+    </div>
+    <div class="note">
+      <b>glm-5.3-flash 仍没有窗口</b>
+      <p>官方没单列。这个模型不自动压，手动 <code>/compact</code> 按 2 万 token 保留。其余按大纲做完，没有再跳项。</p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

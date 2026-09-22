@@ -13,6 +13,8 @@ import {
   saveSettings,
 } from "../config/index.ts";
 import { agentTurn, type AgentContext } from "../core/agent.ts";
+import { distrustUsage, resetTrust, runCompact, shouldAutoCompact } from "../core/compact.ts";
+import { isContextOverflowError } from "../llm/index.ts";
 import {
   bindSession,
   endSession,
@@ -37,6 +39,7 @@ type Say = (s: string) => void;
 
 export const COMMANDS = [
   { name: "/clear", hint: "clear conversation" },
+  { name: "/compact", hint: "compact context" },
   { name: "/resume", hint: "resume a session in this directory" },
   { name: "/rename", hint: "rename this session" },
   { name: "/model", hint: "switch configured model" },
@@ -64,7 +67,7 @@ function tokenTotals(messages: Message[]): { input: number; output: number; turn
       turns += 1;
     }
   }
-  return { input, output, turns };
+  return { input: input + carried.input, output: output + carried.output, turns };
 }
 
 // 路径里的家目录收成 ~
@@ -74,6 +77,21 @@ function shortHome(p: string): string {
 }
 
 let lastTurn = { input: 0, output: 0 };
+// 被压掉的用量加摘要请求自己的用量。压缩后那些 assistant 不在 messages 里了
+let carried = { input: 0, output: 0 };
+
+function addCarry(u: { input: number; output: number }): void {
+  carried.input += u.input;
+  carried.output += u.output;
+}
+
+function clearCarry(): void {
+  carried = { input: 0, output: 0 };
+}
+
+function compactLine(before: number, after: number, auto: boolean): string {
+  return `${auto ? "auto compacted" : "compacted"} · ${fmt(before)} → ${fmt(after)} tokens`;
+}
 
 // 列表里一项的显示
 function sessionLabel(s: SessionInfo): string {
@@ -133,6 +151,8 @@ export async function pickAndResume(messages: Message[], say: Say, tui?: Tui): P
   messages.length = 0;
   for (const m of loaded) messages.push(m); // 灌内存，不落盘
   lastTurn = { input: 0, output: 0 };
+  clearCarry();
+  distrustUsage(messages); // 上个进程留下的 usage 不拿来判断要不要压
   tui?.clear();
   replayMessages(messages, tui);
   say(dim(`resumed ${loaded.length} messages`));
@@ -281,6 +301,8 @@ async function dispatch(
   if (line === "/clear") {
     messages.length = 0; // 就地清空，调用方拿的还是同一份数组
     lastTurn = { input: 0, output: 0 };
+    clearCarry();
+    resetTrust();
     endSession(); // 断档，旧 jsonl 留在磁盘，下一句用户输入开新文件
     tui?.clear();
     say(dim("(context cleared)"));
@@ -288,6 +310,20 @@ async function dispatch(
   }
   if (line === "/resume") {
     await pickAndResume(messages, say, tui);
+    return "cont";
+  }
+  if (line === "/compact") {
+    const r = await runCompact(messages, signal);
+    if (!r.ok) {
+      // 没东西可压不是错误
+      if (r.empty) say(dim(r.error));
+      else if (!r.aborted) say(red(`error: ${r.error}`));
+    } else {
+      addCarry(r.carried);
+      say(dim(compactLine(r.before, r.after, false)));
+    }
+    const lost = takePersistError();
+    if (lost) say(dim(`session not saved: ${lost}`));
     return "cont";
   }
   if (line === "/rename" || line.startsWith("/rename ")) {
@@ -352,10 +388,23 @@ async function dispatch(
     return "cont";
   }
   if (!line) return "cont";
+  // 先压再写入这句。先 push 的话这句会落在分隔之前，恢复时读不到
+  if (shouldAutoCompact(messages, getProvider().contextWindow)) {
+    const r = await runCompact(messages, signal);
+    if (!r.ok) {
+      if (r.aborted) return "cont";
+      say(dim(`compact skipped: ${r.error}`));
+    } else {
+      addCarry(r.carried);
+      say(dim(compactLine(r.before, r.after, true)));
+    }
+  }
   pushMessage(messages, { role: "user", content: line });
-  const afterUser = messages.length;
-  // 用差值算「这一轮」token，footer 的 turn 才不会被历史冲掉
   const before = tokenTotals(messages);
+  const tailIsTurn = () => {
+    const last = messages[messages.length - 1];
+    return last?.role === "user" && last.content === line;
+  };
   try {
     await agentTurn(messages, { ...ctx, signal });
     const after = tokenTotals(messages);
@@ -364,9 +413,34 @@ async function dispatch(
     if (din || dout) lastTurn = { input: din, output: dout };
     say("");
   } catch (e) {
-    // 还没写出 assistant 才拿掉这条 user。已经写下的轮次原样留（toolResult 齐全）。abort 不会到这里
-    if (messages.length === afterUser) popMessage(messages);
-    say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
+    if (isContextOverflowError(e)) {
+      say(dim("context overflow · compacting and retrying"));
+      const r = await runCompact(messages, signal);
+      if (!r.ok && r.aborted) {
+        // 用户打断：这句留下，不再发
+      } else if (!r.ok) {
+        if (tailIsTurn()) popMessage(messages);
+        say(red(`error: ${r.error}`));
+      } else {
+        addCarry(r.carried);
+        say(dim(compactLine(r.before, r.after, false)));
+        try {
+          await agentTurn(messages, { ...ctx, signal });
+          const after = tokenTotals(messages);
+          const din = after.input - before.input;
+          const dout = after.output - before.output;
+          if (din || dout) lastTurn = { input: din, output: dout };
+          say("");
+        } catch (e2) {
+          if (tailIsTurn()) popMessage(messages);
+          say(red(`error: ${e2 instanceof Error ? e2.message : String(e2)}`));
+        }
+      }
+    } else {
+      // 末尾仍是这句 user 才撤。压缩之后用长度判断会指错
+      if (tailIsTurn()) popMessage(messages);
+      say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
+    }
   }
   const lost = takePersistError();
   if (lost) say(dim(`session not saved: ${lost}`));
@@ -395,7 +469,7 @@ export async function repl(messages: Message[], ctx: AgentContext, tui?: Tui): P
       if (raw === null) break;
       const line = raw.trim();
       // 斜杠命令不 busy，避免 /model 时 footer 还写着 esc interrupt
-      const chatting = !!line && !line.startsWith("/");
+      const chatting = !!line && (!line.startsWith("/") || line === "/compact");
       abort = new AbortController();
       if (chatting) tui.setBusy(true);
       try {

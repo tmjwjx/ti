@@ -75,7 +75,10 @@ export async function callOpenAI(
         stream: true,
         stream_options: { include_usage: true },
         messages: toWire(systemPrompt, messages),
-        tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })),
+        // 空数组有的端点会 400。压缩请求不带工具，就不要这个字段
+        ...(tools.length
+          ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })) }
+          : {}),
       }),
       signal,
     });

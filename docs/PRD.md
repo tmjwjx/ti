@@ -29,7 +29,7 @@ ti 是一个极简 coding agent CLI，设计主要参考三个开源项目：
 
 - 想学习「coding agent 原理」的开发者：模块化源码、中文注释、架构文档齐全
 - 用国产模型端点（Anthropic 或 OpenAI 兼容协议）的开发者
-- 场景：在某个项目目录里 `ti` 启动 → 自然语言派活（读代码、改 bug、写脚本、跑测试）→ 可中断当前 turn → `--resume` 或 `/resume` 接上。上下文压缩仍是初版未做项
+- 场景：在某个项目目录里 `ti` 启动 → 自然语言派活（读代码、改 bug、写脚本、跑测试）→ 可中断当前 turn → `--resume` 或 `/resume` 接上。上下文可经 `/compact` 或自动压缩收短
 
 ## 4. 功能需求
 
@@ -44,7 +44,7 @@ agent loop（流式请求→完整 toolCall 才执行→结果回灌→循环）
 | **session 持久化与恢复** | 已落地 | 消息（含工具结果与 token）写入 `<cwd>/.ti/sessions/<首句 slug>_<4hex>.jsonl`；`ti --resume` 与 `/resume` 只列当前目录。没有 `-c` | 杀掉进程后 `--resume` 或 `/resume` 能完整接续；A、B 项目互不可见；session 文件可直接 `cat` |
 | **中断** | 已落地 | agent 执行期间 Ctrl+C 或 Esc 中断当前 turn（AbortSignal 贯穿 fetch 与 bash），回到提示符不退出。收尾走 `finishInterrupted`：未配 toolCall 只 seal；否则留下已有内容并 push `user("[interrupted]")`；屏幕 `ui.info("[interrupted]")`。空闲时 Ctrl+C 退出（见 4.4 与 DESIGN.md 中断一节） | 长跑 bash 命令能被打断；被打断的 turn 协议合法，屏幕出现 `[interrupted]` |
 | **权限确认** | 不做 | 工具直接执行，没有权限确认。ask 方案见 DESIGN.md 权限一节，不是交付项 | 调用工具时立即执行，终端不出现确认 |
-| **/compact 上下文压缩** | 未做 | 把当前消息历史发给模型生成结构化摘要（已完成事项、改动文件、关键决策、待办），替换为单条摘要消息继续会话；原始历史保留在 session 文件 | 压缩后 token 数显著下降；模型能基于摘要正确接续工作 |
+| **/compact 上下文压缩** | 已落地 | 手动 `/compact`、用量超过阈值时自动压、上下文超限时压一次并重试。保留最近一段原文，更早的换成固定分段摘要。`glm-5.3-flash` 没有窗口值，不自动压 | 压缩后屏幕有 `compacted · A → B tokens`；`--resume` 能接上摘要和保留段 |
 | **输入体验** | 未做 | 历史持久化到 `~/.ti/history`（上限 1000 条）；支持 `\` 续行多行输入。TUI 已有进程内 ↑↓ 历史与 Shift+Enter 换行，不是本项 | 重启后方向键↑能翻出上次会话的命令 |
 | **token 会话累计** | 已落地 | 从 `messages` 累计 in/out 与调用次数；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到初版之后） | `/cost` 显示累计 in/out token 与会话轮数 |
 | **npm 打包就绪（不发布）** | 部分 | 现状：`scripts/build.mjs`（esbuild minify）→ `bin/ti.js`，`bin:{"ti":"bin/ti.js"}`，`files:["bin"]`，`engines` Node ≥22.18，MIT LICENSE。开发 `npm start` 直跑 `src/`。仍缺：英文优先 README、`npm test` 冒烟 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
@@ -154,7 +154,7 @@ scripts/build.mjs   # 发布构建
 
 初版目标见 §2：日常编码能在 ti 里跑完。待发功能齐了再把 `package.json` 打成 `1.0.0`。
 
-当前已落地：session（工作区未发）、中断、token 累计、`/provider`、TUI、打包主干。未做：`/compact`、输入历史、冒烟、skills、打包余项。权限确认不做。
+当前已落地：session、`/compact`、中断、token 累计、`/provider`、TUI、打包主干。未做：输入历史、冒烟、skills、打包余项。权限确认不做。
 
 ## 8. 开放问题
 

@@ -14,7 +14,7 @@ export type CatalogEntry = {
   protocol: Protocol;
   baseURL: string;
   auth: "bearer" | "x-api-key";
-  models: { id: string }[];
+  models: { id: string; contextWindow?: number }[];
 };
 
 // 协议和默认地址写在这里，界面不出现协议选项
@@ -24,21 +24,25 @@ export const CATALOG: Record<string, CatalogEntry> = {
     protocol: "openai",
     baseURL: "https://api.deepseek.com",
     auth: "bearer",
-    models: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }],
+    models: [
+      { id: "deepseek-v4-flash", contextWindow: 1_000_000 },
+      { id: "deepseek-v4-pro", contextWindow: 1_000_000 },
+    ],
   },
   kimi: {
     label: "Kimi",
     protocol: "anthropic",
     baseURL: "https://api.kimi.com/coding",
     auth: "bearer",
-    models: [{ id: "kimi-k3" }],
+    models: [{ id: "kimi-k3", contextWindow: 1_000_000 }],
   },
   glm: {
     label: "GLM",
     protocol: "openai",
     baseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
     auth: "bearer",
-    models: [{ id: "glm-5.3-flash" }, { id: "glm-5.3" }],
+    // glm-5.3-flash 官方没单列窗口，不写 contextWindow，自动压缩关掉
+    models: [{ id: "glm-5.3-flash" }, { id: "glm-5.3", contextWindow: 1_000_000 }],
   },
 };
 
@@ -125,7 +129,15 @@ export function resolveProvider(name: string, modelOverride?: string): ProviderC
     fail(`provider "${name}" has no API key — run ti setup`);
   // settings 或目录写了 auth 用那个；否则 anthropic 默认 x-api-key，其余 bearer
   const auth: "bearer" | "x-api-key" = providerSettings.auth ?? catalog?.auth ?? (protocol === "anthropic" ? "x-api-key" : "bearer");
-  return { name, protocol, baseURL, model, apiKey, auth };
+  const contextWindow = contextWindowFor(name, model);
+  return { name, protocol, baseURL, model, apiKey, auth, contextWindow };
+}
+
+// 选中模型的窗口。settings 里写了的优先，否则用目录。都没有就是 undefined
+function contextWindowFor(name: string, modelId: string): number | undefined {
+  const saved = (settings.providers?.[name]?.models ?? []).find((m: { id: string; contextWindow?: number }) => m.id === modelId);
+  if (typeof saved?.contextWindow === "number") return saved.contextWindow;
+  return CATALOG[name]?.models.find((m) => m.id === modelId)?.contextWindow;
 }
 
 // 这家配置是否完整能用

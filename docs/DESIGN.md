@@ -199,18 +199,77 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 
 **拒绝处理**：`deny` → 不执行，结果为 `is_error:true, "Permission denied by user"` 回灌（模型据此换方案）。`a` 放行的工具名存模块级 `Set<string>`，仅本会话有效。
 
-### /compact（未做）
+### /compact 上下文压缩（已落地 · 0.0.4）
 
-**触发**：REPL `/compact`；`messages.length < 10` → 提示「历史太短，无需压缩」。
+> 实现文档另开一页：`docs/impl/compact.md`（切点算法、落点清单、阈值换算都在那里）。本节只留设计取舍。
 
-**流程**：
+参考 pi、Codex、dsh 三家的共识定的：按 token 比例触发（不按消息条数）、摘要用固定分段、保留最近若干轮（不是只留一条摘要）、重复压缩把上一次摘要合并进去。三家阈值分别是「窗口减预留 16384」「窗口 90%」「窗口 80%」；保留量分别是「固定 20000 token」「只留摘要」「窗口 16%」。ti 取 80% 触发、保留窗口 16% 且不低于 20000。
 
-1. 构造压缩请求：`[...messages, {role:"user", content: COMPACT_PROMPT}]`（COMPACT_PROMPT 要求输出：已完成事项 / 改动的文件及要点 / 关键决策 / 待办，≤500 字）
-2. **复用现有流式 `callLLM`**，`onText` 传空操作（不新增非流式分支）；取响应 text 块拼接为摘要
-3. `session.markCompact()` 写分隔标记 → `messages = [{role:"user", content: "[此前对话摘要]\n" + summary + "\n请基于摘要继续。"}]` → 作为新消息追加进 session
-4. 打印压缩前后消息条数
+#### 模型窗口（新增配置）
 
-恢复时 `loadMessages` 只取最后一个 compact 标记之后的消息（见 session 一节），压缩效果跨进程保留。
+`CatalogEntry.models` 的每一项加 `contextWindow`（token 数）。`settings.json` 里 `providers.<name>.models` 同样可写，优先级与其他字段一致。`ProviderConf` 跟着加 `contextWindow?: number`，由 `resolveProvider` 带出来。
+
+取不到窗口大小的模型：自动压缩整体关闭，只有手动 `/compact` 可用。不猜默认值。
+
+#### 触发
+
+| 入口 | 条件 |
+|---|---|
+| `/compact` | 你敲命令，随时可压 |
+| 自动 | 每轮用户输入发请求前，估算 token 超过窗口 80% |
+| 兜底 | 请求回来报上下文超限，压一次再重试这一轮 |
+
+估算取最后一条 assistant 的 `usage.input + usage.output`；还没有 assistant 就不估（首轮不会超）。这个值就是上一轮真实发出去的量，比自己数字符准。
+
+#### 切在哪里
+
+从最新往前累加 `estimateTokens`（字符数除以 4，偏保守），到达窗口 10% 就停，这一点之后的保留，之前的交给模型做摘要。
+
+切点只能落在 `user` 或 `assistant` 上，绝不落在 `toolResult`——工具结果必须紧跟它的调用。保留段头部若是孤立的 `toolResult`（对应的调用已经被切走），直接丢掉。摘要段里未配结果的调用不必补，因为整段会被摘要替换掉。
+
+没有可压的部分（比如只剩摘要加一条巨大的工具结果）：不发请求，提示后返回。
+
+#### 摘要
+
+复用现有流式 `callLLM`，`onText` 传空操作，不新增非流式分支。用当前 provider 当前模型，不另配小模型。这一次的 token 照常进 `usage`，`/cost` 和底栏都算上。
+
+请求内容是把要压缩的那段对话序列化成文本，包在标签里，后面跟压缩指令——不是把历史当对话继续发，避免模型接着聊。固定分段，缺的段写 `(none)` 而不是省掉：原始意图、关键技术点、涉及文件与改动、出过的错与怎么解决、待办、当前进度、下一步、关键约束与决定。要求原样保留文件路径、命令、报错原文、函数名。不限字数，靠生成上限约束。
+
+#### 落盘与内存
+
+1. 模型给出摘要文本后，`session.markCompact()` 写分隔行
+2. 摘要作为一条 `user` 消息追加进 session，内容带固定标记包裹，供下次识别
+3. 内存 `messages` 换成：摘要那条 + 保留段
+
+分隔之前的原文全部留在文件里，`cat` 还能看到。`loadMessages` 只取最后一道分隔之后，所以压缩效果跨进程保留。
+
+#### 重复压缩
+
+支持。第二次压缩时，历史里已有的摘要（靠标记认出来）一并交给模型，要求合并成一份、丢掉过时的，不是两份叠着。
+
+#### 屏幕
+
+只打一行：`compacted · 48,200 → 9,600 tokens`。自动触发时前面加触发标记。不打消息条数，不清屏，历史留在上面。
+
+#### 失败与中断
+
+压缩请求走本轮的 `AbortSignal`，Esc 或 Ctrl+C 能打断。打断、请求失败、模型没给出可用文字，三种都不改内存、不写文件，只报错——宁可不压，不能压出空摘要把历史弄丢。
+
+自动压缩失败不挡你这一轮：照原样把请求发出去，宁可这一轮贵一点。
+
+#### 兜底：模型报上下文超限
+
+自动压缩按 80% 估算，工具结果很大或窗口值配错时照样会撞上限。现在这类错误直接抛到 REPL 红字报错，历史没变，再问一次还是撞。
+
+`callLLM` 失败时匹配上下文超限特征（HTTP 400 且消息含 `context length` / `maximum context` / `too many tokens` 一类字样，各家措辞不同，用关键词）。认不出就当普通错误照原样报。
+
+认出来：提示 `context overflow · compacting and retrying`，走同一套压缩，然后把这一轮重发一次。**整轮只重试一次**，压完再撞就报错——说明单条内容本身超了，再压没用（根子在工具输出截断，不在这一版）。
+
+这一轮的 user 消息保留，不走 `popMessage`——重试要用它。压缩和重试都失败了，才按现有规则撤回。
+
+#### 本版不做
+
+自动压缩的开关与阈值配置项（先写死）、`/compact` 带自定义指令、切点跨轮细分（pi 的 split turn）、把工具结果单独裁剪（dsh 的 pruner）、摘要落进单独文件。
 
 ### 输入体验（未做）
 
@@ -248,7 +307,7 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 ```jsonc
 {
   "name": "@tmjwjx/ti",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "A coding agent for the terminal",
   "type": "module",
   "bin": { "ti": "bin/ti.js" },

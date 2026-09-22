@@ -587,7 +587,7 @@ function makeWriter(file: string, name: string): SessionWriter {
       appendLine(this.file, JSON.stringify(entry) + "\n");
     },
     markCompact() {
-      // 这版没有调用方。/compact 写出分隔后，loadMessages 会从这里切开
+      // /compact 写出分隔后，loadMessages 只取这行之后
       this.append({ type: "compact", createdAt: new Date().toISOString() });
     },
     dropLast() {
@@ -817,6 +817,14 @@ export function listSessions(limit = 10): SessionInfo[] {
     }
   }
   return items;
+}
+
+// 压缩落盘：分隔、摘要、再把保留段追加一遍。没有 writer 就不写，避免为摘要新建文件
+export function commitCompact(summary: Message, kept: Message[]): void {
+  if (!writer) return;
+  writer.markCompact();
+  writer.append({ type: "message", ...summary });
+  for (const m of kept) writer.append({ type: "message", ...m });
 }
 
 // 对话状态的唯一入口：先推进内存，再追加一行

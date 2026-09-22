@@ -115,16 +115,26 @@ export async function callAnthropic(
         // provider.auth 是 bearer 走 Authorization，否则 x-api-key
         ...(provider.auth === "bearer" ? { authorization: `Bearer ${provider.apiKey}` } : { "x-api-key": provider.apiKey! }),
       },
-      body: JSON.stringify({ model: provider.model, max_tokens: 16384, stream: true, system: systemPrompt, messages: toWire(messages), tools }),
+      body: JSON.stringify({
+        model: provider.model,
+        max_tokens: 16384,
+        stream: true,
+        system: systemPrompt,
+        messages: toWire(messages),
+        ...(tools.length ? { tools } : {}),
+      }),
       signal,
     });
     if (!res.ok || !res.body) throw new Error(`API error ${res.status}: ${await res.text()}`);
 
     for await (const ev of sseJson(res)) {
       switch (ev.type) {
-      case "message_start":
-        usage.input = ev.message?.usage?.input_tokens ?? 0;
+      case "message_start": {
+        // input_tokens 不含缓存。Kimi 命中缓存时它只剩一小截，自动压缩会永远不触发
+        const u = ev.message?.usage ?? {};
+        usage.input = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
         break;
+      }
       case "content_block_start":
         if (ev.content_block.type === "text") content[ev.index] = { type: "text", text: "" };
         else if (ev.content_block.type === "tool_use") {

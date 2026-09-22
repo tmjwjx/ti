@@ -187,4 +187,4 @@ Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 合�
 
 ## 有意未做
 
-`-c` / `--continue`、`/compact`、skills、历史落盘、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。
+`-c` / `--continue`、skills、历史落盘、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。

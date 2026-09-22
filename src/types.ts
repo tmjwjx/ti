@@ -9,6 +9,7 @@ export interface ProviderConf {
   model: string;
   apiKey?: string;
   auth: "bearer" | "x-api-key"; // anthropic 官方用 x-api-key，Kimi 等用 Bearer
+  contextWindow?: number; // 模型上下文窗口（token）。没有就不自动压缩
 }
 
 export type TextContent = { type: "text"; text: string };
