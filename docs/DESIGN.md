@@ -92,7 +92,9 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 <cwd>/.ti/sessions/<首条用户句 slug>_<4hex>.jsonl
 ```
 
-`cwd` 就是 `process.cwd()`。默认名字取首条用户句第一行：做成 slug（空白和 `/ \ : * ? " < > |` 换成 `-`，连续横杠收成一个，截到约 40 字）+ `_` + 4 位 hex。空句则只用 hex。meta 可带 `name`。`/rename 新名字` 写入 `name`，并把当前文件改成新 slug（hex 后缀保留），`writer.file` 一起改。列表优先显示 `name`，否则用首句。`.ti`、`sessions` 为 `0o700`，jsonl `0o600`。`listSessions` 按 mtime 倒序。settings 仍在 `~/.ti/settings.json`。
+`cwd` 就是 `process.cwd()`。默认名字取首条用户句第一行：做成 slug（控制字符丢掉，空白和 `/ \ : * ? " < > |` 换成 `-`，去掉头尾点，截到约 40 字）+ `_` + 4 位 hex。空句则只用 hex。meta 可带 `name`。`/rename 新名字` 写入 `name`，并把当前文件改成新 slug（hex 后缀保留），`writer.file` 一起改。列表优先显示 `name`，否则用首句。`.ti`、`sessions` 为 `0o700`，jsonl `0o600`。`listSessions` 先按 mtime 排序再解析前 10 份。settings 仍在 `~/.ti/settings.json`。
+
+覆写走临时文件 + fsync + rename。追加后 fsync。文件若不以换行结尾，下一次追加先补一个换行，避免半截 JSON 粘住新行。撤回最后一条按字节截断，不把中文按字符下标重写。同一份 jsonl 带 `.lock`（pid），两份 ti 不能同时写。改名用硬链接，先占新锁再放开旧名，不覆盖已有文件。恢复时补齐缺失的 toolResult、丢掉对不上的结果。单文件超过 32MB 拒绝再追加，读的时候只取尾部。打开路径必须落在当前 `sessions` 目录。若当前目录是 git 仓库且 `.gitignore` 还没有 `.ti/`，建档时补一行。落盘失败不打断对话，提示 `session not saved`。
 
 ```jsonl
 {"type":"meta","version":1,"cwd":"/Users/mac/proj/foo","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-09-16T12:00:00.000Z","name":"帮我改个登录bug"}
@@ -119,13 +121,15 @@ function endSession(): void
 function sessionFile(): string | undefined
 function sessionName(): string | undefined
 function renameSession(name: string): string | undefined  // 改 meta.name + 文件名，返回新路径
+function isSessionPath(file: string): boolean
+function takePersistError(): string | undefined
 ```
 
 `SessionWriter`：`file` / `append` / `markCompact` / `dropLast`。模块级一个写入器。不提供 `latestSessionFor`。
 
 #### 写入
 
-REPL 用户句、agentTurn 里的 assistant / toolResult / `[interrupted]`，全部走 `pushMessage`：内存 push，没有写入器则 `createSession`，再 `appendFileSync` 一行。API 还没写出 assistant 就失败：`popMessage` 内存 pop + 文件 `dropLast`。
+REPL 用户句、agentTurn 里的 assistant / toolResult / `[interrupted]`，全部走 `pushMessage`：内存 push，没有写入器则 `createSession`，再追加一行并 fsync。API 还没写出 assistant 就失败：`popMessage` 内存 pop + 文件 `dropLast`。
 
 #### 挑选（`--resume` 与 `/resume` 同一套）
 
@@ -283,7 +287,7 @@ Available skills (when a task matches a skill, read its SKILL.md with the read t
 | 模块化拆分引入 import 管理成本 | 约定依赖方向（§2 规则）+ 纯类型、无状态模块为主 |
 | Ctrl+C 语义改变（REPL 内从「退出」变「中断 turn」） | 空闲时仍退出；忙时 footer 写 `esc interrupt` |
 | 权限提问与 for-await 主循环的 stdin 竞争 | 已决定不做权限确认；设计稿留在上面，不要实现 |
-| session 文件无锁、无压缩 | 单用户单进程工具，线性追加足够；pi 同样从简 |
+| session 并发与掉电 | 同文件 `.lock`（pid，死进程可抢）；覆写 tmp+fsync+rename；追加 fsync。不做 SQLite / CRDT |
 | compact 用当前 provider 模型 | 不引入额外「小模型」配置，行为可预期 |
 | TUI 用 Esc 打断 | 空闲退出仍是空输入 Ctrl+C 或 `/exit`；没有 Ctrl+D |
 

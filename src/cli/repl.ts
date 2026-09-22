@@ -16,6 +16,7 @@ import { agentTurn, type AgentContext } from "../core/agent.ts";
 import {
   bindSession,
   endSession,
+  isSessionPath,
   listSessions,
   loadMessages,
   openSession,
@@ -24,6 +25,7 @@ import {
   renameSession,
   sessionFile,
   sessionName,
+  takePersistError,
   type SessionInfo,
 } from "../core/session.ts";
 import { dim, red, replayMessages } from "./render.ts";
@@ -116,14 +118,18 @@ export async function pickAndResume(messages: Message[], say: Say, tui?: Tui): P
     say(dim("already on this session"));
     return false;
   }
+  if (!isSessionPath(file)) {
+    say(red("error: session path is outside this project"));
+    return false;
+  }
   let loaded: Message[];
   try {
     loaded = loadMessages(file);
+    bindSession(openSession(file));
   } catch (e) {
     say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
     return false;
   }
-  bindSession(openSession(file));
   messages.length = 0;
   for (const m of loaded) messages.push(m); // 灌内存，不落盘
   lastTurn = { input: 0, output: 0 };
@@ -291,8 +297,14 @@ async function dispatch(
       say(dim(cur ? `session  ${cur}` : "no session yet"));
       return "cont";
     }
+    if (!sessionFile()) {
+      say(dim("no session yet"));
+      return "cont";
+    }
     const next = renameSession(arg);
-    say(dim(next ? `renamed → ${arg}` : "no session yet"));
+    const lost = takePersistError();
+    if (!next || lost) say(dim(`session not saved: ${lost ?? "rename failed"}`));
+    else say(dim(`renamed → ${arg}`));
     return "cont";
   }
   if (line === "/setup") {
@@ -356,6 +368,8 @@ async function dispatch(
     if (messages.length === afterUser) popMessage(messages);
     say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
   }
+  const lost = takePersistError();
+  if (lost) say(dim(`session not saved: ${lost}`));
   return "cont";
 }
 

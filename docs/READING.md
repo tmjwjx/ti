@@ -38,13 +38,14 @@ TUI 只被复用了已有的 `pick` / `writeln` / `clear`。
 | `sessionDir` | `join(cwd, ".ti/sessions")`，不往上找 git 根 |
 | `createSession` | mkdir `0o700`，建 `<slug>_<4hex>.jsonl`，先写 meta |
 | `openSession` / `bindSession` / `endSession` / `sessionFile` | 指向哪一份 |
-| `loadMessages` | 坏行跳过；只取最后一个 compact 之后的 message |
-| `listSessions(10)` | 当前目录、mtime 倒序 |
+| `loadMessages` | 坏行跳过；只取最后一个 compact 之后；补齐缺失 toolResult |
+| `listSessions(10)` | 当前目录、mtime 倒序；大文件只读文件头 |
 | `pushMessage` | 数组 push；`writer` 为空则先建档；再追一行 |
 | `popMessage` | 数组 pop + 文件去掉最后一条 message |
 | `renameSession` | 改 `meta.name`，文件换新 slug，hex 后缀保留 |
+| `isSessionPath` / `takePersistError` | 路径必须在 sessions 内；落盘失败给界面取一次 |
 
-文件名取首条用户句第一行做 slug（空白和 `/ \ : * ? " < > |` 换 `-`，截 40 字）。IO 全包 try：磁盘出问题只降级为不落盘。
+文件名取首条用户句第一行做 slug（控制字符丢掉，空白和 `/ \ : * ? " < > |` 换 `-`，去头尾点，截 40 字）。覆写 tmp+fsync+rename；同文件 `.lock`。IO 全包 try：磁盘出问题只降级为不落盘，界面提示 `session not saved`。
 
 ---
 

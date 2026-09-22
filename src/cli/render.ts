@@ -69,7 +69,8 @@ export function replayMessages(
   const writeln = out?.writeln ?? ((s: string) => console.log(s));
   for (const m of messages) {
     if (m.role === "user") {
-      const text = userText(m);
+      let text = userText(m);
+      if (text.length > 4000) text = text.slice(0, 4000) + "\n… (truncated)";
       writeln("");
       for (const [i, part] of text.split("\n").entries()) {
         writeln((i === 0 ? `${cyan("❯")} ` : "  ") + part);
@@ -80,7 +81,8 @@ export function replayMessages(
       let hadText = false;
       for (const b of m.content) {
         if (b.type === "text" && b.text) {
-          ui.text(b.text); // 整段一次写出，不是流式
+          const text = b.text.length > 4000 ? b.text.slice(0, 4000) + "\n… (truncated)" : b.text;
+          ui.text(text);
           hadText = true;
         }
       }
