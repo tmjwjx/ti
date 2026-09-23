@@ -4,6 +4,7 @@
 > 实现约束：模块化 `src/`、零运行时依赖、Node ≥22.18、双协议（Anthropic / OpenAI 兼容）
 > 开发 `npm start` 直跑 TypeScript；发布 `scripts/build.mjs` 打成 `bin/ti.js`
 > 当前文件树以已存在的为准。标「未做」的是初版增量，不要当成已经落地。包号对照见 `docs/VERSIONS.md`
+> 测试：`npm test`（`node:test`，见 §5）
 
 ## 1. 设计原则
 
@@ -26,6 +27,9 @@ ti/
 ├── docs/                     # PRD.md · DESIGN.md · ARCHITECTURE.md · READING.md
 ├── scripts/
 │   └── build.mjs             # 发布：esbuild minify → bin/ti.js
+├── test/                     # node:test，npm test（见 §5）
+│   ├── helpers.ts            #   临时 HOME 与项目目录、假 fetch、罐头 SSE、记录事件的 AgentUI
+│   └── *.test.ts             #   一个主题一个文件
 └── src/
     ├── main.ts               # 唯一入口：CLI 参数、向导、装配、REPL 分发
     ├── types.ts              # 领域模型（纯类型）：Message 联合 / 内容块 / ProviderConf / StopReason
@@ -55,13 +59,6 @@ ti/
         └── index.ts          #   CATALOG、settings.json、resolveProvider()
 ```
 
-初版仍待加（不要当成已有文件）：
-
-```
-scripts/smoke.mjs             # 冒烟测试
-src/config/paths.ts           # 测试隔离用 TI_HOME
-```
-
 `core/permissions.ts` 与 `cli/input.ts` 是权限确认的设计稿，产品已决定不做，不要实现。
 
 **依赖规则**（import 单向、无环）：
@@ -78,7 +75,7 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 
 **全局可变状态**：`config/index.ts`（当前 provider）、REPL（本轮 `AbortController`、`lastTurn`）、`session.ts`（当前写入器）。其余模块全部无状态。
 
-**路径**：当前 `SETTINGS_PATH` 写在 `config/index.ts`（`~/.ti/settings.json`）。冒烟测试需要隔离时再抽 `config/paths.ts`，用 `TI_HOME` 整体覆盖。
+**路径**：`SETTINGS_PATH` 写在 `config/index.ts`（`~/.ti/settings.json`），import 时按 `homedir()` 算出。测试先改 `HOME` 再 import 来隔离（§5）。
 
 ## 3. 功能详细设计
 
@@ -170,7 +167,7 @@ REPL 用户句、agentTurn 里的 assistant（含被打断的）/ toolResult，�
 - `toolUse`，或 `stop` 且本条已有完整 toolCall：执行工具。`incomplete`、`badArgs`、`length` 不执行
 - 有 toolCall 但不执行（主要是 `length`）：补错误结果再继续；连续 3 次则停轮
 - 流正常结束且无字无工具：不把空 assistant 写进历史
-- bash 监听 abort → `SIGTERM`（2s 后 `SIGKILL`）
+- bash 监听 abort → 给整个进程组发 `SIGTERM`（2s 后 `SIGKILL`），管道和复合命令里的子进程一起杀
 - 工具循环每次迭代前检查 `signal.aborted` → 停止后续执行
 
 **收尾** `finishInterrupted`（互斥，屏幕只打一次 `ui.info("[interrupted]")`）：
@@ -357,28 +354,52 @@ TUI 下 `/help` 在命令列表后面加一段常用快捷键（send、newline�
   "scripts": {
     "start": "node src/main.ts",
     "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.ts",
     "prepublishOnly": "npm run build"
   },
   "license": "MIT"
 }
 ```
 
-`scripts/build.mjs`：esbuild bundle + minify → `bin/ti.js`，`banner` 加 `#!/usr/bin/env node`，无 sourcemap。`LICENSE` 已在仓库。仍缺：`npm test` / 英文优先 README。验收仍是 `npm pack --dry-run` 仅含白名单且 <100KB；**不执行 publish**。
+`scripts/build.mjs`：esbuild bundle + minify → `bin/ti.js`，`banner` 加 `#!/usr/bin/env node`，无 sourcemap。`LICENSE` 已在仓库。仍缺：英文优先 README。验收仍是 `npm pack --dry-run` 仅含白名单且 <100KB；**不执行 publish**。`test/` 不在 `files` 里，不进包。
 
-## 5. 冒烟测试（未做）
+## 5. 测试（已开发 · 0.0.7，待 CR）
 
-`scripts/smoke.mjs`（未做）：零依赖，内置两个 mock server（OpenAI 协议 + Anthropic 协议，罐头 SSE），用 `child_process` 起 `src/main.ts` 子进程并断言 stdout/退出码。场景矩阵：
+#### 框架与入口
 
-| # | 场景 | 环境 | 断言 |
-|---|---|---|---|
-| S1 | OpenAI 协议全链路 | settings.json 的 baseURL 指 mock + 假 key | 输出含 mock 工具结果；mock 侧角色序列 `system→user→assistant+tool_calls→tool` |
-| S2 | Anthropic 协议全链路 | settings.json 的 baseURL 指 mock | 同上（content_block 事件流） |
-| S3 | 配置优先级 | HOME 隔离 + settings.json vs CLI | 实际请求的 baseURL/key 符合 CLI > 文件已写字段 > CATALOG |
-| S4 | `/model`、`/provider` | 管道输入命令序列 | 输出包含切换后的 provider:model |
-| S5 | session 恢复 | 跑一轮 → `--resume` 再起 | 第二轮请求 messages 含第一轮历史 |
-| S6 | /compact | mock 第二轮返回摘要 | messages 被重置为摘要消息 |
+Node 自带的 `node:test` + `node:assert/strict`，不加任何依赖。`npm test` 就是 `node --test test/*.test.ts`：Node ≥22.18 直接跑 `.ts`，规矩和 `src/` 一样（相对 import 带 `.ts`，只用可擦除语法）。`tsconfig.json` 的 `include` 带上 `test/**/*.ts`，测试和源码一起过 `tsc --noEmit`。
 
-任一断言失败 → 非零退出并打印失败项；全过打印绿字汇总。
+`test/` 平铺，一个主题一个文件（`skills.test.ts`、`session.test.ts`、`agent.test.ts`……）。共用的东西放 `test/helpers.ts`，它本身不是测试文件。
+
+#### 两类测试（照 pi）
+
+1. **函数单测**，占大头。直接调已经导出的函数：skill 扫描与 frontmatter、`toLlm`、错误判别、压缩的估算与切点、会话落盘与修补、工具、配置优先级、按键解析、`replayMessages`。
+2. **进程内流程测试**。把 `globalThis.fetch` 换成按顺序回放罐头响应的假实现（`fakeFetch`），回包是 OpenAI chat/completions 或 Anthropic Messages 的 SSE 帧，然后直接调 `callLLM`、`agentTurn`、`runCompact`、`repl`。假 fetch 记下每次请求的地址、头和 body，断言就落在「发出去的线格式」和「收回来的内部消息」两头。每个测试结束还原 fetch。
+
+不起 ti 子进程，不起 HTTP 服务，不用真 key，不碰网络。工具是真的跑（`write`、`read`、`bash` 在临时目录里执行）。
+
+#### 隔离
+
+`config/index.ts` import 时就读 `~/.ti/settings.json`，`session.ts`、`skills.ts` 用的是 `process.cwd()`。所以每个测试文件开头先调 `isolate()`：建一份临时根目录，`HOME` 指到里面的 `home/`，`process.chdir` 进 `project/`，进程退出时整份删掉；之后才用顶层 `await import()` 引 `src/`。`node --test` 每个文件单独一个进程，模块级状态（当前会话 writer、当前厂家、压缩的可信标记、repl 的用量结转）不会串到别的文件；同一文件内靠 `endSession`、`resetTrust`、`reloadSettings` 在 `beforeEach` 里复位。不会碰真实的 `~/.ti`，也不会碰仓库自己的 `.ti/`。
+
+#### 几处写法
+
+- **罐头 SSE**：`openaiStream`、`anthropicStream` 按参数拼帧（文本碎片、按 index 分片的工具参数、结束原因、用量）；每项是一个网络包，可以故意切在半帧中间。
+- **中断**：回包带 `hang` 时，包发完后流卡住并回调一次，测试在回调里 `abort()`，流随之以 AbortError 结束。这样「收到半截再被打断」「一个字节都没收到就被打断」都是确定的，不靠计时。工具阶段的打断用 `recordUI` 的 `onToolCall` 钩子，在微任务里 abort，打断的一定是已经起来的 `bash`。
+- **不断言耗时**：bash 的超时、打断都跑 `sleep 60`，没被杀就不会自然结束，只断言结果里的 `killed by SIGTERM (timeout)` 或 `(interrupted)`；测试级 `timeout` 只防卡死。并行跑、机器忙时也不抖。
+- **TUI**：`openTui()` 之后往 `process.stdin` 上 `emit("data", …)` 喂按键，结果从 `readLine()` 取。测试期间吞掉 `process.stdout.write` 的字符串输出；测试进程向 `node --test` 汇报用的是 Buffer，要放行，否则结果会丢。单独的 Esc 要过 40ms 拼键超时，用 `mock.timers` 拨钟，不真等。
+- **REPL**：`dispatch` 不导出，走导出的 `repl(messages, ctx, skills, tui)`，传一个按脚本吐输入行、记下所有输出的假 `Tui`，斜杠命令、普通对话、skill 调用、`/compact`、自动压缩、超限重试、`/resume` 都从这一条路进去。
+- **拼键超时**：`createKeyAssembler` 用 `node:test` 的 `mock.timers` 拨钟。
+
+#### 测试查出、这一版修掉的
+
+- `llm/sse.ts` 只按 `\n\n` 切事件，CRLF 分隔的 SSE 一帧都解析不出来。改成事件和行都同时认 `\n` 与 `\r\n`
+- `tools/bash.ts` 打断或超时只给 `sh` 发 SIGTERM，复合命令（`a; sleep 10`、管道）里的子进程继续跑并占着输出，要等它自己跑完才返回。改成命令自成一个进程组（POSIX 上 `detached`），打断、超时、ti 退出时杀整个组；超时改成自己计时，不用 `spawn` 的 `timeout`（它同样只杀 `sh`）
+
+#### 这版不测
+
+- `main.ts` 的参数解析与装配、`cli/setup.ts` 与 `cli/form.ts` 的全屏交互、`repl()` 的非 TTY readline 分支：都要真终端或子进程，按约定不起子进程
+- TUI 的具体重绘内容（行级 diff、列宽折行）：只测输入到提交的行为，不对屏幕字节做快照
 
 ## 6. 风险与取舍
 

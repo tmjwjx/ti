@@ -36,7 +36,7 @@
 | 0.0.4 | `/compact` 上下文压缩（含自动压缩、超限兜底重试） | 已提交，未发 npm |
 | 0.0.5 | 输入体验：恢复会话时回灌 ↑ 历史、`\` 续行、`/help` 快捷键（前提：照 pi 把摘要改成独立角色、中断标成 aborted，压缩 prompt 换成 pi 的） | 已提交，未发 npm |
 | 0.0.6 | skills（`/名字` 手动调用、`/skills`；顺带修命令列表回车丢参数、删掉自动改 `.gitignore`） | 已提交，未发 npm |
-| 0.0.7 | 冒烟测试 | 未做 |
+| 0.0.7 | 测试（顺带修测试查出的 bash 打断不杀子进程、SSE 不认 CRLF） | 已提交，未发 npm |
 | 0.0.8 | 打包余项（英文 README 等） | 未做 |
 | 1.0.0 | 初版：上表待发齐了 | 未到 |
 
@@ -46,4 +46,4 @@
 
 0.0.3（session）已发 npm，落盘可靠性收口也已提交，没另开号。
 
-0.0.4（`/compact`）已提交，发不发 npm 另说。实现在 `src/core/compact.ts`，说明在 `docs/impl/compact.md`。`glm-5.3-flash` 仍没有窗口值，不自动压。0.0.5（输入体验）已提交，发不发 npm 另说。实现在 `src/cli/tui.ts`、`src/cli/repl.ts`、`src/llm/index.ts` 的 `toLlm`、`src/core/compact.ts`，说明在 `docs/impl/history.md`。0.0.6（skills）已提交，发不发 npm 另说。实现在 `src/core/skills.ts`，说明在 `docs/impl/skills.md`。还没有正式版、没有存量文件，会话格式直接改，不做旧格式兼容。自动往用户项目 `.gitignore` 加 `.ti/` 的逻辑已删掉。下一号是 0.0.7（冒烟测试），仍先谈需求再写方案。
+0.0.4（`/compact`）已提交，发不发 npm 另说。实现在 `src/core/compact.ts`，说明在 `docs/impl/compact.md`。`glm-5.3-flash` 仍没有窗口值，不自动压。0.0.5（输入体验）已提交，发不发 npm 另说。实现在 `src/cli/tui.ts`、`src/cli/repl.ts`、`src/llm/index.ts` 的 `toLlm`、`src/core/compact.ts`，说明在 `docs/impl/history.md`。0.0.6（skills）已提交，发不发 npm 另说。实现在 `src/core/skills.ts`，说明在 `docs/impl/skills.md`。还没有正式版、没有存量文件，会话格式直接改，不做旧格式兼容。自动往用户项目 `.gitignore` 加 `.ti/` 的逻辑已删掉。0.0.7（测试）已提交，发不发 npm 另说。测试在 `test/*.test.ts`，`npm test` 跑，说明在 `docs/DESIGN.md` §5。顺带修了测试查出的两处：bash 打断或超时不杀子进程、SSE 不认 CRLF。下一号是 0.0.8（打包余项），仍先谈需求再写方案。

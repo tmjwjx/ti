@@ -47,8 +47,8 @@ agent loop（流式请求→完整 toolCall 才执行→结果回灌→循环）
 | **/compact 上下文压缩** | 已落地 | 手动 `/compact`、用量超过阈值时自动压、上下文超限时压一次并重试。保留最近一段原文，更早的换成固定分段摘要。`glm-5.3-flash` 没有窗口值，不自动压 | 压缩后屏幕有 `compacted · A → B tokens`；`--resume` 能接上摘要和保留段 |
 | **输入体验** | 已落地 | `--resume` / `/resume` 时把该会话里用户发过的消息灌进 ↑ 历史（不单独存文件，pi 同款）；支持 `\` 续行多行输入；`/help` 列出快捷键。前提是摘要与中断不再伪装成用户消息（照 pi：摘要是独立角色，中断标在被打断的回复上）；压缩 prompt 同时换成 pi 的，摘要后附文件清单 | 恢复会话后按 ↑ 能翻出该会话里发过的消息，且不含 `[interrupted]` 和摘要；`a\` 回车再 `b` 回车，模型收到两行 |
 | **token 会话累计** | 已落地 | 从 `messages` 累计 in/out 与调用次数；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到初版之后） | `/cost` 显示累计 in/out token 与会话轮数 |
-| **npm 打包就绪（不发布）** | 部分 | 现状：`scripts/build.mjs`（esbuild minify）→ `bin/ti.js`，`bin:{"ti":"bin/ti.js"}`，`files:["bin"]`，`engines` Node ≥22.18，MIT LICENSE。开发 `npm start` 直跑 `src/`。仍缺：英文优先 README、`npm test` 冒烟 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
-| **冒烟测试** | 未做 | `scripts/smoke.mjs`：内置 mock server（OpenAI 协议）+ 罐头 SSE，跑通「工具调用全链路、配置优先级、`/model`」断言；`npm test` 可跑 | 无真实 API key 时 `npm test` 全绿 |
+| **npm 打包就绪（不发布）** | 部分 | 现状：`scripts/build.mjs`（esbuild minify）→ `bin/ti.js`，`bin:{"ti":"bin/ti.js"}`，`files:["bin"]`，`engines` Node ≥22.18，MIT LICENSE。开发 `npm start` 直跑 `src/`。仍缺：英文优先 README | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
+| **测试** | 已开发（待 CR） | Node 自带 `node:test`，不加依赖；`test/*.test.ts` 一个主题一个文件。大部分是函数单测；流程测试把 `globalThis.fetch` 换成回放罐头 SSE（OpenAI、Anthropic 两种格式）的假实现，进程内直接调 `agentTurn`、`runCompact`、`callLLM`、`repl`。不起子进程、不起 HTTP 服务、不用真 key；每个文件把 `HOME` 和工作目录换到临时目录 | 无网络、无 API key 时 `npm test` 全绿，全套半分钟内跑完 |
 | **skills** | 已落地 | 启动时扫描项目 `.ti/skills/*/SKILL.md` 与 `~/.ti/skills/*/SKILL.md`（同名项目级优先），手写解析 frontmatter，不引 yaml 库；清单（名称、描述、路径）追加进系统提示词，模型按需用现有 read 工具读全文——渐进披露，pi 同款。`/名字 参数` 手动调用（内置命令优先），全文直接进这一轮；`/skills` 列出已加载的与警告 | 放一个 SKILL.md 到 skills 目录后，agent 能在对话中识别并正确按技能指示行动；`/名字` 调用时请求里带上该 skill 全文 |
 | **/provider 命令** | 已落地 | REPL 内 `/provider` 列出已就绪 provider；`/provider <name>` 整套切换。TUI 下无参展开二级列表。`/model` 只切已写入的模型名 | 不重启即可在已配置的厂家间切换 |
 
@@ -96,7 +96,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 循环层  agentTurn                                （已落地：AbortSignal、finishInterrupted）
 传输层  callLLM 双协议                           （已落地：fetch(signal)、usage）
 工具层  runTool 4 工具                           （已落地：bash 接 AbortSignal）
-待加    冒烟测试、打包余项
+待加    打包余项（测试已开发，待 CR）
 ```
 
 - **session**：`<cwd>/.ti/sessions/*.jsonl`。`--resume` 与 `/resume` 只列当前目录。没有 `-c`
@@ -119,13 +119,14 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
   "scripts": {
     "start": "node src/main.ts",
     "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.ts",
     "prepublishOnly": "npm run build"
   },
   "license": "MIT"
 }
 ```
 
-发布流程（届时）：仓库转公开 → `npm login` → `npm publish --access public`（scoped 首次必须带）→ git tag。当前已能 `npm pack` 或全局安装；打包还缺英文 README 与冒烟。
+发布流程（届时）：仓库转公开 → `npm login` → `npm publish --access public`（scoped 首次必须带）→ git tag。当前已能 `npm pack` 或全局安装；打包还缺英文 README。
 
 ### 6.3 目录结构
 
@@ -138,6 +139,7 @@ src/                # 分层源码（完整树见 ARCHITECTURE.md；目标增量
   llm/              # index.ts · sse.ts · anthropic.ts · openai.ts
   tools/            # index.ts · read/write/edit/bash.ts · truncate.ts
   config/           # index.ts（CATALOG + settings.json）
+test/               # *.test.ts（node:test，npm test）· helpers.ts（临时目录、假 fetch、罐头 SSE）
 package.json        # bin→bin/ti.js / engines / files / license
 README.md           # npm 简介
 LICENSE(MIT)
@@ -145,7 +147,7 @@ docs/               # PRD.md（本文档）· DESIGN.md · ARCHITECTURE.md · RE
 scripts/build.mjs   # 发布构建
 ```
 
-初版仍待加：`config/paths.ts`、`scripts/smoke.mjs`。不要把权限确认的 `permissions.ts`、`cli/input.ts` 当成交付。
+不要把权限确认的 `permissions.ts`、`cli/input.ts` 当成交付。
 
 ## 7. 里程碑
 
@@ -153,10 +155,10 @@ scripts/build.mjs   # 发布构建
 
 初版目标见 §2：日常编码能在 ti 里跑完。待发功能齐了再把 `package.json` 打成 `1.0.0`。
 
-当前已落地：session、`/compact`、中断、输入体验、skills、token 累计、`/provider`、TUI、打包主干。未做：冒烟、打包余项。权限确认不做。
+当前已落地：session、`/compact`、中断、输入体验、skills、token 累计、`/provider`、TUI、打包主干。测试已开发，待 CR。未做：打包余项。权限确认不做。
 
 ## 8. 开放问题
 
 1. 仓库转公开的时机：初版做完即转，还是发布 npm 时再转？（建议：发布时再转，转之前 README 配截图或 GIF）
 2. bin 命令名 `ti` 与既有 npm 包 `ti` 的二进制不冲突（scoped 包互不影响），但若用户机器上已全局装过那个包会撞 PATH——README 里注明即可
-3. 是否需要 GitHub Actions CI（跑 smoke 测试 + Node 22/24/26 矩阵）？建议初版之后加，发布前必须有
+3. 是否需要 GitHub Actions CI（跑 `npm test` + Node 22/24/26 矩阵）？建议初版之后加，发布前必须有

@@ -1,6 +1,6 @@
 {
   "name": "@tmjwjx/ti",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "A coding agent for the terminal",
   "type": "module",
   "bin": {
@@ -16,6 +16,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.ts",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {

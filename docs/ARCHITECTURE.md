@@ -2,7 +2,7 @@
 
 当前实现（`src/` 四层）。需求与未做项以 `docs/PRD.md`、`docs/DESIGN.md` 为准。
 
-零运行时依赖。开发：`npm start` 直接跑 TypeScript。发布：`scripts/build.mjs` 打成 `bin/ti.js`。
+零运行时依赖。开发：`npm start` 直接跑 TypeScript。测试：`npm test`。发布：`scripts/build.mjs` 打成 `bin/ti.js`。
 
 ## 总体分层
 
@@ -66,9 +66,16 @@ src/
     truncate.ts      2000 行 / 50KB
   config/
     index.ts         CATALOG、settings、resolveProvider
+test/
+  helpers.ts         临时 HOME 与项目目录、假 fetch、罐头 SSE、记录事件的 AgentUI
+  *.test.ts          node:test，一个主题一个文件；npm test 跑全部
 ```
 
-尚未落地（见 DESIGN.md）：`paths.ts`、冒烟测试。`permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。
+`permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。
+
+## 测试
+
+`npm test` = `node --test test/*.test.ts`，零依赖。函数单测为主；流程测试把 `globalThis.fetch` 换成回放罐头 SSE 的假实现，进程内直接调 `callLLM`、`agentTurn`、`runCompact`、`repl`，工具在临时目录里真跑。不起子进程、不起 HTTP 服务、不用真 key。每个测试文件先把 `HOME` 和工作目录换到临时目录，再 `import` 源码。详见 DESIGN.md §5。
 
 ## 启动
 
@@ -184,7 +191,7 @@ Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 再�
 | 流失败停轮 | `agentTurn` | `incomplete` / `badArgs` 不跑半截工具 |
 | max_tokens | `agentTurn` | `length` 不执行，seal 后最多再试 3 次 |
 | 中断收尾 | `finishInterrupted` | 工具阶段补结果；请求中断存 aborted，发请求时跳过 |
-| bash 可杀 | `bash.ts` | abort → SIGTERM，2s 后 SIGKILL |
+| bash 可杀 | `bash.ts` | abort 或超时 → 整个进程组 SIGTERM，2s 后 SIGKILL |
 | edit 原文定位 | `edit.ts` | 多条对着同一份原文 `indexOf`，区间不重叠，倒序写回 |
 | MAX_TURNS=100 | `agentTurn` | 死循环保险丝 |
 | 输出截断 | `truncate` | 2000 行 / 50KB |
@@ -192,4 +199,4 @@ Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 再�
 
 ## 有意未做
 
-`-c` / `--continue`、skill 的 `/reload` 与其他目录、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。输入历史不单独存文件，恢复会话时从会话回灌。
+`-c` / `--continue`、skill 的 `/reload` 与其他目录、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。输入历史不单独存文件，恢复会话时从会话回灌。
