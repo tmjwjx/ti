@@ -2,7 +2,7 @@
 
 当前实现（`src/` 四层）。需求与未做项以 `docs/PRD.md`、`docs/DESIGN.md` 为准。
 
-零运行时依赖。开发：`npm start` 直接跑 TypeScript。测试：`npm test`。发布：`scripts/build.mjs` 打成 `bin/ti.js`。
+零运行时依赖。开发：`npm start` 直接跑 TypeScript。测试：`npm test`。类型检查：`npm run check`。发布：`scripts/build.mjs` 打成 `bin/ti.js`，`npm run pack:check` 验包。
 
 ## 总体分层
 
@@ -42,6 +42,7 @@
 ```
 src/
   main.ts            入口：参数、向导、装配
+  version.ts         包号（发布产物构建时写死，开发时读 package.json）
   types.ts           内部消息与 ProviderConf（纯类型）
   cli/
     tui.ts           TTY 主屏
@@ -69,6 +70,9 @@ src/
 test/
   helpers.ts         临时 HOME 与项目目录、假 fetch、罐头 SSE、记录事件的 AgentUI
   *.test.ts          node:test，一个主题一个文件；npm test 跑全部
+scripts/
+  build.mjs          esbuild → bin/ti.js，写入包号
+  pack-check.mjs     构建、打包、装到临时目录跑 --version / --help，查白名单与体积
 ```
 
 `permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。

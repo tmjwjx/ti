@@ -1,7 +1,28 @@
 {
   "name": "@tmjwjx/ti",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "A coding agent for the terminal",
+  "keywords": [
+    "coding-agent",
+    "cli",
+    "terminal",
+    "llm",
+    "ai",
+    "anthropic",
+    "openai",
+    "deepseek",
+    "kimi",
+    "glm"
+  ],
+  "homepage": "https://github.com/tmjwjx/ti#readme",
+  "bugs": {
+    "url": "https://github.com/tmjwjx/ti/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tmjwjx/ti.git"
+  },
+  "author": "tmjwjx",
   "type": "module",
   "bin": {
     "ti": "bin/ti.js"
@@ -17,10 +38,13 @@
     "start": "node src/main.ts",
     "build": "node scripts/build.mjs",
     "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit -p .",
+    "pack:check": "node scripts/pack-check.mjs",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3"
   }
 }

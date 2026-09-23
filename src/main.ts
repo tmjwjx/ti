@@ -10,15 +10,17 @@ import { openTui } from "./cli/tui.ts";
 import type { Tui } from "./cli/tui.ts";
 import { FormAbort } from "./cli/form.ts";
 import { runSetup } from "./cli/setup.ts";
+import { VERSION } from "./version.ts";
 
 // 打印用法并退出
 function help(code: number): never {
-  console.log(`ti
+  console.log(`ti ${VERSION}
 usage: ti [setup] [--provider name] [-m model] [--resume]
   setup            configure provider, model, and API key
   -m, --model      model name
       --provider   deepseek | kimi | glm | custom names from settings.json
       --resume     pick a session from this directory
+  -v, --version    print version
 config: ~/.ti/settings.json`);
   process.exit(code);
 }
@@ -66,6 +68,10 @@ async function main() {
     else if ((a === "-m" || a === "--model") && args[i + 1]) cliModel = args[++i];
     else if (a === "--resume") resume = true;
     else if (a === "-h" || a === "--help") help(0);
+    else if (a === "-v" || a === "--version") {
+      console.log(VERSION);
+      process.exit(0);
+    }
     else {
       console.error(`error: unknown argument ${a}`);
       help(1);

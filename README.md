@@ -1,22 +1,30 @@
 # ti
 
-终端 coding agent：读文件、改代码、跑命令。
+English | [中文](https://github.com/tmjwjx/ti/blob/main/docs/README.zh.md)
+
+A coding agent for the terminal. It reads files, edits code, and runs commands.
+
+## Install
 
 ```bash
 npm i -g @tmjwjx/ti
-ti
 ```
 
-Node ≥ 22.18. First run opens a setup picker for provider, model, and API key. Config lives at `~/.ti/settings.json`. Re-run anytime with `ti setup`.
+Requires Node ≥ 22.18.
+
+## First run
+
+Start `ti` in the project directory you want to work on. The first run opens a setup picker for provider, model, and API key. Run `ti setup` to change it later.
 
 ```
-ti [--provider name] [-m model] [--resume]
+ti [setup] [--provider name] [-m model] [--resume] [--version]
 ```
 
-Sessions are stored in `.ti/sessions/` of the directory you start from. `--resume` and `/resume` only list this project. `/clear` keeps the old file and starts a new one on the next message.
+## Commands
 
 ```
 /clear      clear conversation
+/compact    compact context
 /resume     resume a session in this directory
 /rename     rename this session
 /model      switch configured model
@@ -28,6 +36,23 @@ Sessions are stored in `.ti/sessions/` of the directory you start from. `--resum
 /exit       quit
 ```
 
-Start it in the project directory you want to work on.
+## Keys
 
-Skills: put `SKILL.md` under `.ti/skills/<name>/` (this project) or `~/.ti/skills/<name>/` (all projects). The model reads a skill when the task matches its description; `/<name> args` runs it directly. Skills are loaded at startup. A skill can make the model run any command, so only add ones you trust.
+```
+enter            send
+shift+enter      newline (or \ then enter)
+↑ / ↓            history
+esc              interrupt / back
+ctrl+c           clear · interrupt · quit
+pageup/pagedown  scroll
+```
+
+## Sessions, compaction, skills
+
+- **Sessions** are saved in `.ti/sessions/` of the directory you start from. `--resume` and `/resume` list this project only.
+- **Compaction**: `/compact` summarizes older messages and keeps the recent ones. It also runs automatically when the context gets large.
+- **Skills**: put `SKILL.md` under `.ti/skills/<name>/` or `~/.ti/skills/<name>/`. The model reads a skill when the task matches its description; `/<name> args` runs it directly.
+
+## License
+
+MIT

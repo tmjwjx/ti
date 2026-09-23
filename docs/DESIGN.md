@@ -338,7 +338,7 @@ TUI 下 `/help` 在命令列表后面加一段常用快捷键（send、newline�
 - `/provider <name>` → `resolveProvider(name)`；失败打印错误、保持当前不变
 - `/model` 只切当前厂家已写入的模型 id；未知 id 提示走 `/setup`，不随口写进 settings
 
-## 4. 打包与发布（部分落地）
+## 4. 打包与发布（已落地，未发布）
 
 现状已按此落地。hashbang 写在构建产物上，不写在 `src/main.ts`。
 
@@ -361,7 +361,9 @@ TUI 下 `/help` 在命令列表后面加一段常用快捷键（send、newline�
 }
 ```
 
-`scripts/build.mjs`：esbuild bundle + minify → `bin/ti.js`，`banner` 加 `#!/usr/bin/env node`，无 sourcemap。`LICENSE` 已在仓库。仍缺：英文优先 README。验收仍是 `npm pack --dry-run` 仅含白名单且 <100KB；**不执行 publish**。`test/` 不在 `files` 里，不进包。
+`scripts/build.mjs`：esbuild bundle + minify → `bin/ti.js`，`banner` 加 `#!/usr/bin/env node`，无 sourcemap。`LICENSE` 已在仓库。验收仍是 `npm pack --dry-run` 仅含白名单且 <100KB；**不执行 publish**。`test/` 不在 `files` 里，不进包。0.0.7 实测：`bin/ti.js` 68KB，包压缩 26KB、解压 71KB，冷启动 60–70ms。
+
+**0.0.8 补上的**（实现文档另开一页：`docs/impl/packaging.md`）：英文 `README.md` + 中文 `docs/README.zh.md`（放在根目录会被 npm 强制打进包），只写安装和用法；`ti --version`（构建时 `define` 写入版本号，开发时读 `package.json`）；`package.json` 补 `repository` / `homepage` / `bugs` / `keywords` / `author`；`scripts/pack-check.mjs` 构建、打包、装到临时目录、跑 `--version` 与 `--help`、查白名单和体积。类型检查用 devDependency `typescript`，不进包。不做 CI。
 
 ## 5. 测试（已开发 · 0.0.7，待 CR）
 
