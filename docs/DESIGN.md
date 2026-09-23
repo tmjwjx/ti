@@ -10,8 +10,9 @@
 1. **模块化单职责**：按层拆分，每个文件一个明确职责、可独立理解、可独立测试；不设行数硬指标，职责清晰为准
 2. **零运行时依赖**：只用 Node 标准库（fs/path/os/readline/child_process）。发布用 esbuild 是 devDependency
 3. **协议无关内核**：循环层/工具层只面对自定义内部消息格式（`types.ts` 的消息联合）与 `ProviderConf`，新增功能不碰协议转换层
-4. **失败就地回灌**：工具失败转成 `isError` 的 toolResult 回灌模型。中断走 `finishInterrupted`（未配 toolCall 只 seal；否则 push `user("[interrupted]")`）。loop 不因这些失败崩溃
-5. **状态**：当前对话是内存 `messages[]`，经 `pushMessage` 追加到 `<cwd>/.ti/sessions/*.jsonl`；配置 = `~/.ti/settings.json`；TUI 输入历史仅进程内。`~/.ti/history` 仍未做
+4. **失败就地回灌**：工具失败转成 `isError` 的 toolResult 回灌模型。中断走 `finishInterrupted`（工具阶段被打断：给没跑的工具补错误结果；请求中被打断：存一条 `stopReason: "aborted"` 的 assistant，发请求时整条跳过）。loop 不因这些失败崩溃
+5. **状态**：当前对话是内存 `messages[]`，经 `pushMessage` 追加到 `<cwd>/.ti/sessions/*.jsonl`；配置 = `~/.ti/settings.json`；TUI 输入历史在进程内，恢复会话时从会话里回灌，不单独存文件
+8. **存事实，不存话术**（取自 pi）：摘要是单独的 `summary` 角色，中断是 assistant 的 `stopReason: "aborted"`，会话里只记发生了什么。要对模型说的那句话（摘要前后缀）只在 `callLLM` 的 `toLlm()` 里生成，aborted 的回复也在那里跳过
 6. **开发免构建**：Node type-stripping 直接运行 `.ts`；相对 import 必须带 `.ts` 扩展名；只用可擦除语法（无 enum/namespace/参数属性）。发布另走 minify 打包
 7. **注释**：每个函数上方一两句中文说明功能/关键逻辑；复杂业务在步骤旁讲清为什么和分支。一眼能看懂的代码不堆注释。标识符英文，注释中文。
 
@@ -97,14 +98,16 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 覆写走临时文件 + fsync + rename。追加后 fsync。文件若不以换行结尾，下一次追加先补一个换行，避免半截 JSON 粘住新行。撤回最后一条按字节截断，不把中文按字符下标重写。同一份 jsonl 带 `.lock`（pid），两份 ti 不能同时写。改名用硬链接，先占新锁再放开旧名，不覆盖已有文件。恢复时补齐缺失的 toolResult、丢掉对不上的结果。单文件超过 32MB 拒绝再追加，读的时候只取尾部。打开路径必须落在当前 `sessions` 目录。若当前目录是 git 仓库且 `.gitignore` 还没有 `.ti/`，建档时补一行。落盘失败不打断对话，提示 `session not saved`。
 
 ```jsonl
-{"type":"meta","version":1,"cwd":"/Users/mac/proj/foo","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-09-16T12:00:00.000Z","name":"帮我改个登录bug"}
+{"type":"meta","version":2,"cwd":"/Users/mac/proj/foo","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-09-16T12:00:00.000Z","name":"帮我改个登录bug"}
 {"type":"message","role":"user","content":"帮我改个 bug"}
 {"type":"message","role":"assistant","content":[...],"stopReason":"stop","usage":{"input":100,"output":40}}
 {"type":"message","role":"toolResult","toolCallId":"...","toolName":"read","content":"...","isError":false}
+{"type":"message","role":"assistant","content":[...],"stopReason":"aborted","usage":{"input":0,"output":0}}
 {"type":"compact","createdAt":"..."}
+{"type":"message","role":"summary","text":"## Goal\n...","files":{"read":[...],"modified":[...]}}
 ```
 
-compact 行只预留：写入器有 `markCompact()`，读的时候只取最后一个 compact 之后。`/compact` 那一版再真正压缩。
+读的时候只取最后一个 compact 之后。`version` 从 0.0.5 起是 2（多了 `summary` 角色和 `aborted` 结束原因）；版本号比自己高的文件拒绝打开，v1 文件被接上时先把 meta 改写成 2。详见 `docs/impl/history.md` §3.2。
 
 #### 模块（`src/core/session.ts`）
 
@@ -129,7 +132,7 @@ function takePersistError(): string | undefined
 
 #### 写入
 
-REPL 用户句、agentTurn 里的 assistant / toolResult / `[interrupted]`，全部走 `pushMessage`：内存 push，没有写入器则 `createSession`，再追加一行并 fsync。API 还没写出 assistant 就失败：`popMessage` 内存 pop + 文件 `dropLast`。
+REPL 用户句、agentTurn 里的 assistant（含被打断的）/ toolResult，全部走 `pushMessage`：内存 push，没有写入器则 `createSession`，再追加一行并 fsync。API 还没写出 assistant 就失败：`popMessage` 内存 pop + 文件 `dropLast`。
 
 #### 挑选（`--resume` 与 `/resume` 同一套）
 
@@ -171,10 +174,12 @@ REPL 用户句、agentTurn 里的 assistant / toolResult / `[interrupted]`，全
 
 **收尾** `finishInterrupted`（互斥，屏幕只打一次 `ui.info("[interrupted]")`）：
 
-- 栈尾有未配 toolCall：只 `sealTools`（`Error: aborted by user`），不再追加 interrupted user——调用必须有结果，否则下一轮 400
-- 否则（半截字或零字节）：留下已有内容（含 user），再 `push user("[interrupted]")`，避免下一轮是没人答的提问
+0.0.5 起照 pi 改（详见 `docs/impl/history.md` §3.1）：
 
-零字节 abort 不 throw 出循环，由收尾写入说明。有半截内容的 abort 先收下 assistant，再走同一套收尾。
+- 工具执行阶段被打断（assistant 已完整收到）：没跑的工具各补一条 `Error: aborted by user`——这条 assistant 要发给模型，调用必须有结果，否则下一轮 400
+- 请求中被打断（半截字、半截工具调用、零字节），或两次请求之间：存一条 `stopReason: "aborted"` 的 assistant，内容是已经收到的部分（可以为空）。不补工具结果，不写额外消息。发请求时 `toLlm()` 整条跳过，模型看到的是「上一个问题 + 新输入」合成的一条 user
+
+零字节 abort 不 throw 出循环，由收尾写入空的 aborted assistant。0.0.4 及之前写的是 `user("[interrupted]")`，旧会话里的照旧当 user。
 
 **触发（TUI）**：没有 Ctrl+D。退出和打断只走 Ctrl+C：有字清空 → 向导取消 → busy 打断 → 空闲退出。Esc：向导取消 → 二级列表往回退 → busy 打断（不丢队列）→ 清空。`/exit` 退出。非 TTY readline 仍是空闲 Ctrl+C 退出。AbortSignal 贯穿 `fetch` 与 bash。
 
@@ -223,7 +228,7 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 
 #### 切在哪里
 
-从最新往前累加 `estimateTokens`（字符数除以 4，偏保守），到达窗口 10% 就停，这一点之后的保留，之前的交给模型做摘要。
+从最新往前累加 `estimateTokens`（CJK 一字一 token，其余四字一 token），到达保留量（窗口 16%，不低于 20000、不高于 40000）就停，这一点之后的保留，之前的交给模型做摘要。
 
 切点只能落在 `user` 或 `assistant` 上，绝不落在 `toolResult`——工具结果必须紧跟它的调用。保留段头部若是孤立的 `toolResult`（对应的调用已经被切走），直接丢掉。摘要段里未配结果的调用不必补，因为整段会被摘要替换掉。
 
@@ -238,14 +243,19 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 #### 落盘与内存
 
 1. 模型给出摘要文本后，`session.markCompact()` 写分隔行
-2. 摘要作为一条 `user` 消息追加进 session，内容带固定标记包裹，供下次识别
-3. 内存 `messages` 换成：摘要那条 + 保留段
+2. 摘要作为一条 `summary` 角色的消息追加进 session，只存正文和文件清单（0.0.4 存的是带前导语的 `user`，0.0.5 起改）
+3. 保留段重新追加一遍
+4. 内存 `messages` 换成：摘要那条 + 保留段
+
+发请求时 `toLlm()` 把 `summary` 翻译成 user 消息，前后缀照 pi：`The conversation history before this point was compacted into the following summary:` 加 `<summary>…</summary>`。
+
+**0.0.5 起 prompt 换成 pi 的**：system prompt、六段格式（Goal / Constraints & Preferences / Progress / Key Decisions / Next Steps / Critical Context）、`[User]: …` 这种序列化格式都照抄 pi；摘要后面由代码贴上读过、改过的文件清单。详见 `docs/impl/history.md` §3.2。
 
 分隔之前的原文全部留在文件里，`cat` 还能看到。`loadMessages` 只取最后一道分隔之后，所以压缩效果跨进程保留。
 
 #### 重复压缩
 
-支持。第二次压缩时，历史里已有的摘要（靠标记认出来）一并交给模型，要求合并成一份、丢掉过时的，不是两份叠着。
+支持。第二次压缩时，历史里已有的摘要（`summary` 角色）不进序列化，单独放进 `<previous-summary>`，改用 pi 的合并指令：保留旧信息、加入新进展、把做完的从 In Progress 挪到 Done。文件清单由代码把新旧两份合并。结果仍是一份摘要，不是两份叠着。
 
 #### 屏幕
 
@@ -271,11 +281,36 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 
 自动压缩的开关与阈值配置项（先写死）、`/compact` 带自定义指令、切点跨轮细分（pi 的 split turn）、把工具结果单独裁剪（dsh 的 pruner）、摘要落进单独文件。
 
-### 输入体验（未做）
+### 输入体验（已落地 · 0.0.5）
 
-**历史持久化**：启动读 `~/.ti/history`（不存在则空），按 readline 约定**最新在前**反转后传 `createInterface({ history, historySize: 1000 })`；每接受一条非空非 `/` 命令的输入，`appendFileSync` 追加一行；文件超 1000 行时启动读取阶段截断（取最后 1000 行）。连续重复行不重复写入。
+> 实现文档另开一页：`docs/impl/history.md`（每处角色分支的改法、落点清单都在那里）。本节只留设计取舍。
 
-**多行输入**：REPL 循环里，若行以 `\` 结尾 → 去掉 `\`，继续读下一行拼接（提示符变为 `... `），直到不以 `\` 结尾再提交。与 for-await 天然兼容。
+#### ↑ 历史：从会话回灌，不单独存文件
+
+参考了三家：Codex 存全局 `~/.codex/history.jsonl`；pi 只在内存，恢复会话时从会话里回灌；dsh 没有终端输入历史。ti 取 pi 的做法。会话文件本来就是「用户说过什么」的唯一记录，再存一份就要再维护一套持久化（并发追加、半截行、截断改写、权限）。
+
+`--resume` / `/resume` 载入后，把 `role === "user"` 的消息灌进 TUI 的 ↑ 历史。本进程已有的保留，新会话的接在后面。`/clear` 不动 ↑ 历史。上限 1000 条，连续重复只留一条，去重和上限只在 TUI 的 `remember()` 里写一次。
+
+代价：新开会话 ↑ 为空；斜杠命令不进会话，重启后翻不到；压缩掉的那部分输入翻不到。
+
+#### 前提：摘要和中断不再伪装成 user（照 pi）
+
+回灌要求 user 角色里只有用户亲手打的。0.0.4 及之前，摘要和 `[interrupted]` 都伪装成 user 存着。0.0.5 起照 pi：
+
+- 中断：被打断的 assistant 标 `stopReason: "aborted"`，不写额外消息，发请求时整条跳过。中断不能当工具回复写：大多数中断发生时没有工具调用，工具回复没有 id 可挂，两个协议都会 400。
+- 摘要：单独的 `summary` 角色，只存正文和文件清单，前后缀在发请求时加。压缩 prompt 一并换成 pi 的。
+
+翻译集中在 `callLLM` 里的 `toLlm()`：摘要翻成 user、跳过 aborted、合并相邻 user。会话格式版本 1 → 2。旧会话里的伪装 user 不迁移。
+
+这一步顺带让恢复时的重放和运行时一致：被打断处画半截内容加一行 `[interrupted]`，摘要画一行提示，不再把摘要全文画成用户消息。
+
+#### `\` 续行
+
+光标前一个字符是 `\` 时按 Enter：删掉 `\`、插入换行、不提交。不支持 modifyOtherKeys 的终端里 Shift+Enter 进来就是普通回车，这是那里唯一能打多行的办法。管道模式下以 `\` 结尾的行和下一行拼起来再提交。
+
+#### `/help` 快捷键
+
+TUI 下 `/help` 在命令列表后面加一段常用快捷键（send、newline、history、interrupt、quit、scroll）。Shift+Enter 换行早就有，这里把它写出来。
 
 ### token 累计与 /cost（已落地）
 

@@ -18,7 +18,8 @@ export type ToolCall = { type: "toolCall"; id: string; name: string; arguments: 
 
 // stop 正常结束，length 输出触达上限，toolUse 要调工具
 // incomplete 流未给出结束原因，badArgs 有正式 tool 结束但参数解不开
-export type StopReason = "stop" | "length" | "toolUse" | "incomplete" | "badArgs";
+// aborted 用户打断。发请求时整条跳过，不当成模型说过的话
+export type StopReason = "stop" | "length" | "toolUse" | "incomplete" | "badArgs" | "aborted";
 
 export type UserMessage = { role: "user"; content: string | TextContent[] };
 export type AssistantMessage = {
@@ -35,4 +36,14 @@ export type ToolResultMessage = {
   isError: boolean; // true 时模型应据此改参数重试
 };
 
-export type Message = UserMessage | AssistantMessage | ToolResultMessage;
+// 压缩摘要。只存正文和代码统计的文件清单，前后缀在发请求时加
+export type SummaryMessage = {
+  role: "summary";
+  text: string;
+  files: { read: string[]; modified: string[] };
+};
+
+// 协议认得的三种。summary 和 aborted 在 callLLM 里先翻成这三种
+export type LlmMessage = UserMessage | AssistantMessage | ToolResultMessage;
+
+export type Message = LlmMessage | SummaryMessage;

@@ -67,7 +67,7 @@ src/
     index.ts         CATALOG、settings、resolveProvider
 ```
 
-尚未落地（见 DESIGN.md）：`skills.ts`、`paths.ts`、历史落盘、冒烟测试。`permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。
+尚未落地（见 DESIGN.md）：`skills.ts`、`paths.ts`、冒烟测试。`permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。
 
 ## 启动
 
@@ -126,8 +126,8 @@ flowchart TD
 
 **中断收尾** `finishInterrupted`（屏幕只打一次 `[interrupted]`）：
 
-- 栈尾有未配 toolCall：只 `sealTools("Error: aborted by user")`，不再追加 interrupted user（否则下一轮协议 400）
-- 否则：留下已有内容，再 `push user("[interrupted]")`
+- 工具执行阶段被打断（assistant 已完整收到）：没跑的工具补 `Error: aborted by user`。这条要发给模型，调用必须有结果
+- 请求中被打断，或两次请求之间：存一条 `stopReason: "aborted"` 的 assistant（内容是已收到的半截，可以是空的）。不补工具结果。`toLlm()` 发请求时整条跳过
 
 **流失败**：`stopReason` 未收到线上结束原因 → `incomplete`；说完或正式 tool 结束但参数解不开 → `badArgs`。这两种不跑半截工具，seal 后停轮。
 
@@ -154,7 +154,11 @@ flowchart TD
 ]
 ```
 
-Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 合成一条（角色必须交替）。OpenAI `toWire`：`toolResult` 1:1 成 `role:"tool"`；system 单独一条。
+`callLLM` 先过 `toLlm()`：`summary` 翻成带前后缀的 user，`aborted` 的 assistant 整条丢掉，相邻 user 合成一条。然后才进协议文件。
+
+Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 再合成一条（角色必须交替）。OpenAI `toWire`：`toolResult` 1:1 成 `role:"tool"`；system 单独一条。
+
+压缩摘要是 `{ role: "summary", text, files }`，只存正文和读过、改过的文件清单。会话封面 `version` 从 0.0.5 起是 2，v1 文件被接上时改写成 2。
 
 ## 配置
 
@@ -178,7 +182,7 @@ Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 合�
 |---|---|---|
 | 流失败停轮 | `agentTurn` | `incomplete` / `badArgs` 不跑半截工具 |
 | max_tokens | `agentTurn` | `length` 不执行，seal 后最多再试 3 次 |
-| 中断收尾 | `finishInterrupted` | 未配 toolCall 先补结果，协议合法 |
+| 中断收尾 | `finishInterrupted` | 工具阶段补结果；请求中断存 aborted，发请求时跳过 |
 | bash 可杀 | `bash.ts` | abort → SIGTERM，2s 后 SIGKILL |
 | edit 原文定位 | `edit.ts` | 多条对着同一份原文 `indexOf`，区间不重叠，倒序写回 |
 | MAX_TURNS=100 | `agentTurn` | 死循环保险丝 |
@@ -187,4 +191,4 @@ Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 合�
 
 ## 有意未做
 
-`-c` / `--continue`、skills、历史落盘、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。
+`-c` / `--continue`、skills、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。输入历史不单独存文件，恢复会话时从会话回灌。

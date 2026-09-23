@@ -31,10 +31,10 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { randomBytes } from "node:crypto";
-import type { Message, StopReason, TextContent, ToolCall } from "../types.ts";
+import type { Message, StopReason, SummaryMessage, TextContent, ToolCall } from "../types.ts";
 import { getProvider } from "../config/index.ts";
 
-const META_VERSION = 1;
+const META_VERSION = 2;
 const HEX_LEN = 4;
 const SLUG_CHARS = 40;
 const MAX_BYTES = 32 * 1024 * 1024;
@@ -43,7 +43,7 @@ const LIST_PARSE = 256 * 1024;
 const DROP_WINDOW = 1024 * 1024;
 const LOCK_TRIES = 5;
 const REPAIR = "Error: missing tool result (session repaired)";
-const STOPS = new Set<StopReason>(["stop", "length", "toolUse", "incomplete", "badArgs"]);
+const STOPS = new Set<StopReason>(["stop", "length", "toolUse", "incomplete", "badArgs", "aborted"]);
 
 export type SessionInfo = {
   file: string;
@@ -348,6 +348,9 @@ function asMessage(raw: any): Message | undefined {
     const stop = STOPS.has(raw.stopReason) ? raw.stopReason : "stop";
     return { role: "assistant", content, stopReason: stop, usage: asUsage(raw.usage) };
   }
+  if (raw.role === "summary" && typeof raw.text === "string" && raw.text.trim()) {
+    return { role: "summary", text: raw.text, files: asFiles(raw.files) };
+  }
   if (raw.role === "toolResult" && typeof raw.toolCallId === "string") {
     return {
       role: "toolResult",
@@ -357,6 +360,17 @@ function asMessage(raw: any): Message | undefined {
       isError: !!raw.isError,
     };
   }
+}
+
+// 清单缺了或形状不对就当空的，不让一行坏字段把整份会话丢掉
+function stringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x): x is string => typeof x === "string" && x.length > 0);
+}
+
+function asFiles(raw: any): SummaryMessage["files"] {
+  if (!raw || typeof raw !== "object") return { read: [], modified: [] };
+  return { read: stringList(raw.read), modified: stringList(raw.modified) };
 }
 
 // 补上缺失的 toolResult，丢掉对不上的结果，避免恢复后下一轮 400
@@ -370,7 +384,7 @@ function repairMessages(messages: Message[]): Message[] {
     pending = [];
   };
   for (const m of messages) {
-    if (m.role === "user") {
+    if (m.role === "user" || m.role === "summary") {
       flush();
       out.push(m);
       continue;
@@ -378,7 +392,8 @@ function repairMessages(messages: Message[]): Message[] {
     if (m.role === "assistant") {
       flush();
       out.push(m);
-      pending = m.content.filter((b): b is ToolCall => b.type === "toolCall");
+      // aborted 发请求时整条跳过，给它补结果只会留下没有调用的 toolResult
+      if (m.stopReason !== "aborted") pending = m.content.filter((b): b is ToolCall => b.type === "toolCall");
       continue;
     }
     const i = pending.findIndex((tc) => tc.id === m.toolCallId);
@@ -479,8 +494,8 @@ function atomicWrite(file: string, data: string): void {
   }
 }
 
-// 就地改 meta.name。jsonl 只能追加，改封面这一处只好整文件覆写
-function rewriteMetaName(file: string, name: string): void {
+// 就地改 meta 的若干字段。jsonl 只能追加，改封面这一处只好整文件覆写
+function rewriteMeta(file: string, patch: Record<string, unknown>): void {
   const st = statSync(file);
   if (st.size > MAX_BYTES) throw new Error(`session file exceeds ${MAX_BYTES} bytes`);
   const text = readFileSync(file, "utf8");
@@ -488,11 +503,20 @@ function rewriteMetaName(file: string, name: string): void {
   for (let i = 0; i < lines.length; i++) {
     const raw = parseLine(lines[i]!);
     if (raw?.type === "meta") {
-      lines[i] = JSON.stringify({ ...raw, name });
+      lines[i] = JSON.stringify({ ...raw, ...patch });
       atomicWrite(file, lines.join("\n"));
       return;
     }
   }
+}
+
+// v1 文件被接上之后也可能写出 summary 和 aborted。先把封面改成当前版本，每份只改一次
+function upgradeSession(file: string): void {
+  const ver = metaVersion(file);
+  if (ver === undefined || ver >= META_VERSION) return;
+  const st = statSync(file);
+  if (st.size > MAX_BYTES) return;
+  rewriteMeta(file, { version: META_VERSION });
 }
 
 // 追加一行并 fsync。已有文件加上本行超过上限就拒绝，避免无限涨
@@ -683,6 +707,12 @@ export function bindSession(w: SessionWriter): void {
   }
   // 先占新锁，失败则旧档仍握在手里，避免换档中途两头都没锁
   acquireLock(w.file);
+  try {
+    upgradeSession(w.file);
+  } catch (e) {
+    releaseLock(w.file);
+    throw e;
+  }
   if (writer) releaseLock(writer.file);
   writer = w;
 }
@@ -820,7 +850,7 @@ export function listSessions(limit = 10): SessionInfo[] {
 }
 
 // 压缩落盘：分隔、摘要、再把保留段追加一遍。没有 writer 就不写，避免为摘要新建文件
-export function commitCompact(summary: Message, kept: Message[]): void {
+export function commitCompact(summary: SummaryMessage, kept: Message[]): void {
   if (!writer) return;
   writer.markCompact();
   writer.append({ type: "message", ...summary });
@@ -895,7 +925,7 @@ export function renameSession(name: string): string | undefined {
       writer.file = dest;
       fsyncDir(dest);
     }
-    rewriteMetaName(writer.file, display);
+    rewriteMeta(writer.file, { name: display });
     writer.name = display;
     return writer.file;
   } catch (e) {

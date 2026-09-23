@@ -21,6 +21,7 @@ export type Tui = {
   onInterrupt(fn: () => void): void;
   pick<T>(title: string, choices: TuiChoice<T>[], initial?: number): Promise<T | undefined>;
   ask(title: string, opts?: { secret?: boolean; placeholder?: string }): Promise<string | undefined>;
+  addHistory(lines: string[]): void;
 };
 
 // 往终端写字
@@ -202,6 +203,7 @@ export function openTui(): Tui {
   const stdin = process.stdin;
   const transcript: string[] = [];
   const history: string[] = [];
+  const HISTORY_CAP = 1000;
   let tail = "";
   let input = "";
   let cursor = 0;
@@ -519,13 +521,22 @@ export function openTui(): Tui {
     }
   };
 
+  // 记一条 ↑ 历史。和会话里的 user 一样先 trim，连续相同的只留一条
+  const remember = (line: string) => {
+    const text = line.trim();
+    if (!text) return;
+    if (history[history.length - 1] === text) return;
+    history.push(text);
+    if (history.length > HISTORY_CAP) history.shift();
+  };
+
   // 清空 editor、入历史、echo，再 deliver。模型在跑也会立刻从框里消失
   const submit = (line: string) => {
     setInput("");
     histIdx = -1;
     draft = "";
     paletteIndex = 0;
-    if (line.trim()) history.push(line);
+    remember(line);
     echoUser(line);
     paint();
     deliver(line);
@@ -702,6 +713,13 @@ export function openTui(): Tui {
     if (key === "enter") {
       if (wizard?.kind === "ask") {
         endWizard(input);
+        return;
+      }
+      // 光标前是 \：删掉它换行，不提交。不支持 Shift+Enter 的终端靠这个打多行
+      if (!wizard && chars()[cursor - 1] === "\\") {
+        deleteRange(cursor - 1, cursor);
+        insert("\n");
+        paint();
         return;
       }
       if (paletteOpen && found[paletteIndex]) {
@@ -938,6 +956,12 @@ export function openTui(): Tui {
     // 注册打断回调
     onInterrupt(fn) {
       interrupt = fn;
+    },
+    // 恢复会话时把用户打过的话灌进来。正翻着历史就回到草稿
+    addHistory(lines) {
+      for (const line of lines) remember(line);
+      histIdx = -1;
+      draft = "";
     },
   };
 }

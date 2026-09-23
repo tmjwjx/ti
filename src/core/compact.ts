@@ -1,6 +1,7 @@
 // 上下文压缩：估算、切点、向模型要摘要、换掉内存并落盘
 // 三个入口（手动 /compact、发请求前自动、超限兜底）都走 runCompact
-import type { AssistantMessage, Message, TextContent, ToolCall } from "../types.ts";
+// 摘要是 summary 角色，只存正文和文件清单。发给模型的前后缀在 llm/index.ts
+import type { AssistantMessage, Message, SummaryMessage, TextContent, ToolCall } from "../types.ts";
 import { getProvider } from "../config/index.ts";
 import { callLLM, isAbortError } from "../llm/index.ts";
 import { commitCompact, sessionFile } from "./session.ts";
@@ -9,30 +10,89 @@ const KEEP_FLOOR = 20_000;
 const KEEP_CAP = 40_000;
 const TRIGGER_CAP = 200_000;
 const TOOL_RESULT_CHARS = 2_000;
-export const SUMMARY_OPEN = "<compacted-summary>";
-export const SUMMARY_CLOSE = "</compacted-summary>";
 
-const SYSTEM = "You are a compaction engine. Output only the structured summary. Do not call tools. Do not continue the conversation.";
+// 压缩请求的提示词照 pi。中文对话压出来多半是英文，这是已知取舍
+const SYSTEM = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
-const INSTRUCTION = `Output EXACTLY these sections, in order. If a section has nothing, write "(none)". Do not drop a section.
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
-## Intent
-## Technical Points
-## Files and Changes
-## Errors and Fixes
-## Pending
-## Current Work
-## Next Step
-## Constraints and Decisions
+const FIRST_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 
-Preserve exact file paths, commands, error text, and function names.
-If the conversation contains a ${SUMMARY_OPEN} block, merge it into this one summary. Drop facts that are no longer true. Do not output two summaries.`;
+Use this EXACT format:
 
-const PREAMBLE = "以下是此前对话的压缩记录，视为已知背景，直接继续，不要复述。";
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+
+const UPDATE_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+
+Update the existing structured summary with new information. RULES:
+- PRESERVE all existing information from the previous summary
+- ADD new progress, decisions, and context from the new messages
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE "Next Steps" based on what was accomplished
+- PRESERVE exact file paths, function names, and error messages
+- If something is no longer relevant, you may remove it
+
+Use this EXACT format:
+
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
+
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
+
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Next Steps
+1. [Update based on current state]
+
+## Critical Context
+- [Preserve important context, add new if needed]
+
+Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 export type CompactResult =
   | { ok: true; before: number; after: number; carried: { input: number; output: number } }
   | { ok: false; aborted: boolean; empty: boolean; error: string };
+
+const EMPTY_FILES: SummaryMessage["files"] = { read: [], modified: [] };
 
 // 这个下标之前的 assistant.usage 不可信：要么是压缩前的上下文大小，要么是上个进程留下的
 // 不标的话，压缩或恢复之后第一句话就会因为旧数字再压一次
@@ -79,6 +139,9 @@ function textOf(content: string | TextContent[]): string {
 
 // 一条消息大概多少 token。只用于切点，触发线用的是真实 usage
 export function estimateTokens(msg: Message): number {
+  if (msg.role === "summary") {
+    return estimateText(msg.text) + estimateText(msg.files.read.join("\n")) + estimateText(msg.files.modified.join("\n"));
+  }
   if (msg.role === "user") return estimateText(textOf(msg.content));
   if (msg.role === "toolResult") return estimateText(msg.content);
   let n = 0;
@@ -96,7 +159,7 @@ function estimateAll(messages: Message[]): number {
   return n;
 }
 
-// 上一轮真实用量，加上那条 assistant 之后新写的内容（工具结果、中断说明）。没有可信 usage 就是 0
+// 上一轮真实用量，加上那条 assistant 之后新写的内容（工具结果）。没有可信 usage 就是 0
 export function contextTokens(messages: Message[]): number {
   for (let i = messages.length - 1; i >= Math.max(0, trustFrom); i--) {
     const m = messages[i];
@@ -138,26 +201,36 @@ export function planCut(messages: Message[], keep: number): number | undefined {
   return cut;
 }
 
+// 工具结果只留开头。摘要不需要完整输出，截断标记写明丢了多少
 function clipResult(s: string): string {
   if (s.length <= TOOL_RESULT_CHARS) return s;
-  return s.slice(0, TOOL_RESULT_CHARS) + "\n…";
+  const dropped = s.length - TOOL_RESULT_CHARS;
+  return `${s.slice(0, TOOL_RESULT_CHARS)}\n\n[... ${dropped} more characters truncated]`;
 }
 
-// 压成一段文本。不当成对话发，避免模型接着聊
+// 压成一段文本。不当成对话发，避免模型接着聊。summary 不进这里，单独放 previous-summary
 function serialize(messages: Message[]): string {
   const parts: string[] = [];
   for (const m of messages) {
     if (m.role === "user") {
-      parts.push(`[user]\n${textOf(m.content)}`);
+      const text = textOf(m.content);
+      if (text) parts.push(`[User]: ${text}`);
     } else if (m.role === "toolResult") {
-      parts.push(`[toolResult ${m.toolName}]\n${clipResult(m.content)}`);
-    } else {
-      const lines: string[] = [];
+      if (m.content) parts.push(`[Tool result]: ${clipResult(m.content)}`);
+    } else if (m.role === "assistant") {
+      const calls: string[] = [];
+      let text = "";
       for (const b of m.content) {
-        if (b.type === "text" && b.text) lines.push(b.text);
-        else if (b.type === "toolCall") lines.push(`tool ${b.name} ${JSON.stringify(b.arguments ?? {})}`);
+        if (b.type === "text") text += b.text;
+        else {
+          const args = Object.entries(b.arguments ?? {})
+            .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+            .join(", ");
+          calls.push(`${b.name}(${args})`);
+        }
       }
-      parts.push(`[assistant]\n${lines.join("\n")}`);
+      if (text) parts.push(`[Assistant]: ${text}`);
+      if (calls.length) parts.push(`[Assistant tool calls]: ${calls.join("; ")}`);
     }
   }
   return parts.join("\n\n");
@@ -170,8 +243,26 @@ function summaryText(msg: AssistantMessage): string | undefined {
   return text || undefined;
 }
 
-function wrapSummary(text: string): Message {
-  return { role: "user", content: `${PREAMBLE}\n\n${SUMMARY_OPEN}\n${text}\n${SUMMARY_CLOSE}` };
+// 读过、改过的文件。只算执行成功的调用，失败和被打断没跑的不算
+function collectFiles(messages: Message[], prev: SummaryMessage["files"]): SummaryMessage["files"] {
+  const ok = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "toolResult" && !m.isError) ok.add(m.toolCallId);
+  }
+  const read = new Set(prev.read);
+  const modified = new Set(prev.modified);
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    for (const b of m.content) {
+      if (b.type !== "toolCall" || !ok.has(b.id)) continue;
+      const path = typeof b.arguments?.path === "string" ? b.arguments.path : "";
+      if (!path) continue;
+      if (b.name === "read") read.add(path);
+      else if (b.name === "write" || b.name === "edit") modified.add(path);
+    }
+  }
+  for (const path of modified) read.delete(path);
+  return { read: [...read].sort(), modified: [...modified].sort() };
 }
 
 // 压掉的 assistant 用量，加上这次摘要请求自己的用量，交给 /cost 结转
@@ -196,16 +287,16 @@ export async function runCompact(messages: Message[], signal?: AbortSignal): Pro
   if (cut === undefined) return { ok: false, aborted: false, empty: true, error: "nothing to compact" };
   const dropped = messages.slice(0, cut);
   const kept = messages.slice(cut);
+  // 旧摘要在最前面。不进序列化，单独交给合并指令，文件清单和新的合并
+  const previous = dropped[0]?.role === "summary" ? dropped[0] : undefined;
+  const fresh = previous ? dropped.slice(1) : dropped;
+  if (!fresh.length) return { ok: false, aborted: false, empty: true, error: "nothing to compact" };
+  let body = `<conversation>\n${serialize(fresh)}\n</conversation>\n\n`;
+  if (previous) body += `<previous-summary>\n${previous.text}\n</previous-summary>\n\n`;
+  body += previous ? UPDATE_PROMPT : FIRST_PROMPT;
   let reply: AssistantMessage;
   try {
-    reply = await callLLM(
-      getProvider(),
-      SYSTEM,
-      [{ role: "user", content: `<conversation>\n${serialize(dropped)}\n</conversation>\n\n${INSTRUCTION}` }],
-      [],
-      () => {},
-      signal,
-    );
+    reply = await callLLM(getProvider(), SYSTEM, [{ role: "user", content: body }], [], () => {}, signal);
   } catch (e) {
     if (signal?.aborted || isAbortError(e)) return { ok: false, aborted: true, empty: false, error: "aborted" };
     return { ok: false, aborted: false, empty: false, error: e instanceof Error ? e.message : String(e) };
@@ -213,7 +304,11 @@ export async function runCompact(messages: Message[], signal?: AbortSignal): Pro
   if (signal?.aborted) return { ok: false, aborted: true, empty: false, error: "aborted" };
   const text = summaryText(reply);
   if (!text) return { ok: false, aborted: false, empty: false, error: "summary was empty or incomplete" };
-  const summary = wrapSummary(text);
+  const summary: SummaryMessage = {
+    role: "summary",
+    text,
+    files: collectFiles(fresh, previous?.files ?? EMPTY_FILES),
+  };
   const carried = carriedUsage(dropped, reply.usage);
   try {
     if (sessionFile()) commitCompact(summary, kept);

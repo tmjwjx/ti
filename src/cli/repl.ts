@@ -50,6 +50,16 @@ export const COMMANDS = [
   { name: "/exit", hint: "quit" },
 ];
 
+// 只在 TUI 的 /help 里打。管道没有这些键
+const KEYS: [string, string][] = [
+  ["enter", "send"],
+  ["shift+enter", "newline (or \\ then enter)"],
+  ["↑ / ↓", "history"],
+  ["esc", "interrupt / back"],
+  ["ctrl+c", "clear · interrupt · quit"],
+  ["pageup/pagedown", "scroll"],
+];
+
 // 千分位
 function fmt(n: number): string {
   return n.toLocaleString("en-US");
@@ -104,6 +114,19 @@ function sessionLabel(s: SessionInfo): string {
   return `${title}  ·  ${s.count} msgs  ·  ${when}`;
 }
 
+// 用户亲手打的话。摘要和被打断的回复不是 user，天然不在里面
+function typedByUser(messages: Message[]): string[] {
+  const out: string[] = [];
+  for (const m of messages) {
+    if (m.role !== "user") continue;
+    const text = typeof m.content === "string"
+      ? m.content
+      : m.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    if (text.trim()) out.push(text);
+  }
+  return out;
+}
+
 // 从当前目录挑一份会话并接上。--resume 与 /resume 共用
 // 选中后就地换数组，不能再走 pushMessage，否则会在旧文件末尾复制一份历史
 export async function pickAndResume(messages: Message[], say: Say, tui?: Tui): Promise<boolean> {
@@ -155,6 +178,7 @@ export async function pickAndResume(messages: Message[], say: Say, tui?: Tui): P
   distrustUsage(messages); // 上个进程留下的 usage 不拿来判断要不要压
   tui?.clear();
   replayMessages(messages, tui);
+  tui?.addHistory(typedByUser(messages));
   say(dim(`resumed ${loaded.length} messages`));
   return true;
 }
@@ -290,6 +314,11 @@ async function dispatch(
   if (line === "/exit" || line === "/quit") return "exit";
   if (line === "/help") {
     for (const c of COMMANDS) say(dim(`${c.name.padEnd(12)} ${c.hint}`));
+    if (tui) {
+      say("");
+      say(dim("keys"));
+      for (const [k, hint] of KEYS) say(dim(`  ${k.padEnd(16)} ${hint}`));
+    }
     return "cont";
   }
   if (line === "/cost") {
@@ -491,11 +520,27 @@ export async function repl(messages: Message[], ctx: AgentContext, tui?: Tui): P
     closed = true;
   });
   rl.prompt();
+  // 以 \ 结尾的行不提交，和下一行拼起来。stdin 关掉时缓冲里剩下的也要发出去
+  let pending = "";
+  const take = async (text: string): Promise<boolean> => {
+    const r = await dispatch(text, messages, ctx, (s) => console.log(s));
+    return r === "exit";
+  };
   // 管道里 stdin 先 close 时，for-await 可能还在吐缓冲行；关掉后不再 prompt
   for await (const raw of rl) {
-    const r = await dispatch(raw.trim(), messages, ctx, (s) => console.log(s));
-    if (r === "exit") break;
+    // 行尾是 \ 才续。\ 后面还有空格则照发，这样能打出以 \ 结尾的一行。中间行不 trim，缩进要留着
+    if (raw.endsWith("\\")) {
+      pending += `${raw.slice(0, -1)}\n`;
+      rl.setPrompt("... ");
+      if (!closed) rl.prompt();
+      continue;
+    }
+    const text = (pending + raw).trim();
+    pending = "";
+    rl.setPrompt("\n> ");
+    if (await take(text)) break;
     if (!closed) rl.prompt();
   }
+  if (pending.trim()) await take(pending.trim());
   rl.close();
 }

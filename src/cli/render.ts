@@ -77,6 +77,10 @@ export function replayMessages(
       }
       continue;
     }
+    if (m.role === "summary") {
+      writeln(dim("[compacted summary]"));
+      continue;
+    }
     if (m.role === "assistant") {
       let hadText = false;
       for (const b of m.content) {
@@ -87,6 +91,11 @@ export function replayMessages(
         }
       }
       if (hadText) writeln("");
+      // 被打断的半截调用不会再执行，也不要画成已调用
+      if (m.stopReason === "aborted") {
+        writeln(dim("[interrupted]"));
+        continue;
+      }
       for (const b of m.content) {
         if (b.type === "toolCall") ui.toolCall(b);
       }

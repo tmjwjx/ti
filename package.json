@@ -1,6 +1,6 @@
 {
   "name": "@tmjwjx/ti",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A coding agent for the terminal",
   "type": "module",
   "bin": {

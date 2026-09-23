@@ -1,6 +1,6 @@
 // 一轮用户输入：问模型 → 有完整 toolCall 就执行并回灌 → 再问
 // 说完、流失败或超过 MAX_TURNS 则结束。状态就是 messages，进出走 pushMessage
-import type { Message, StopReason, ToolCall } from "../types.ts";
+import type { AssistantMessage, Message, StopReason, ToolCall } from "../types.ts";
 import { getProvider } from "../config/index.ts";
 import { callLLM, isAbortError } from "../llm/index.ts";
 import { runTool, TOOLS } from "../tools/index.ts";
@@ -42,9 +42,11 @@ function unmatchedToolCalls(messages: Message[]): ToolCall[] {
       continue;
     }
     if (m.role === "assistant") {
+      // 被打断的那条发请求时会整条跳过，里面的半截调用不用补结果
+      if (m.stopReason === "aborted") return [];
       return m.content.filter((b): b is ToolCall => b.type === "toolCall" && !done.has(b.id));
     }
-    // 碰到 user：本轮还没有 assistant
+    // 碰到 user 或 summary：本轮还没有 assistant
     return [];
   }
   return [];
@@ -62,17 +64,26 @@ function shouldRunTools(stop: StopReason, calls: ToolCall[]): boolean {
   return stop === "toolUse" || stop === "stop";
 }
 
-// 用户中断后的一次收尾：按栈尾互斥补协议或写入说明，屏幕只打一次
-function finishInterrupted(messages: Message[], ui: AgentUI): void {
-  const open = unmatchedToolCalls(messages);
+// 一条被打断的回复。没收到内容就是空的，发请求时整条跳过
+function abortedMessage(partial?: AssistantMessage): AssistantMessage {
+  if (!partial) return { role: "assistant", content: [], stopReason: "aborted", usage: { input: 0, output: 0 } };
+  return { ...partial, stopReason: "aborted" };
+}
+
+// 用户中断后的一次收尾，屏幕只打一次
+// 工具跑到一半：这条 assistant 是完整的，要发给模型，没跑的调用必须补结果
+// 请求中被打断，或两次请求之间：存一条 aborted，不补结果。partial 是已经收到的半截
+function finishInterrupted(messages: Message[], ui: AgentUI, partial?: AssistantMessage): void {
+  const open = partial ? [] : unmatchedToolCalls(messages);
   if (open.length) {
-    // 未配的 toolCall 必须先有结果，否则下一轮 400。协议已合法就不要再追加旁白
     const reason = "Error: aborted by user";
     for (let i = 0; i < open.length; i++) ui.result(reason, true);
     sealTools(open, messages, reason);
   } else {
-    // 半截字或零字节：留下已有内容，用一条真 message 让下一轮不是没人答的提问
-    pushMessage(messages, { role: "user", content: "[interrupted]" });
+    const last = messages[messages.length - 1];
+    if (!(last?.role === "assistant" && last.stopReason === "aborted")) {
+      pushMessage(messages, abortedMessage(partial));
+    }
   }
   ui.info("[interrupted]");
 }
@@ -112,9 +123,9 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
     const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
     // 用户 abort 先收尾，不要和流失败合成
     if (signal?.aborted) {
-      pushMessage(messages, msg);
+      // 半截或恰好收完都按打断存。不补工具结果，发请求时整条跳过
       noteTokens();
-      finishInterrupted(messages, ui);
+      finishInterrupted(messages, ui, msg);
       return;
     }
     const failReason = streamFailReason(msg.stopReason);

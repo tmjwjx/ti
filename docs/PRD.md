@@ -42,10 +42,10 @@ agent loop（流式请求→完整 toolCall 才执行→结果回灌→循环）
 | 功能 | 进度 | 描述 | 验收标准 |
 |---|---|---|---|
 | **session 持久化与恢复** | 已落地 | 消息（含工具结果与 token）写入 `<cwd>/.ti/sessions/<首句 slug>_<4hex>.jsonl`；`ti --resume` 与 `/resume` 只列当前目录。没有 `-c` | 杀掉进程后 `--resume` 或 `/resume` 能完整接续；A、B 项目互不可见；session 文件可直接 `cat` |
-| **中断** | 已落地 | agent 执行期间 Ctrl+C 或 Esc 中断当前 turn（AbortSignal 贯穿 fetch 与 bash），回到提示符不退出。收尾走 `finishInterrupted`：未配 toolCall 只 seal；否则留下已有内容并 push `user("[interrupted]")`；屏幕 `ui.info("[interrupted]")`。空闲时 Ctrl+C 退出（见 4.4 与 DESIGN.md 中断一节） | 长跑 bash 命令能被打断；被打断的 turn 协议合法，屏幕出现 `[interrupted]` |
+| **中断** | 已落地 | agent 执行期间 Ctrl+C 或 Esc 中断当前 turn（AbortSignal 贯穿 fetch 与 bash），回到提示符不退出。工具阶段被打断：没跑的工具补错误结果。请求中被打断：存 `stopReason: "aborted"`，发请求时整条跳过。屏幕 `ui.info("[interrupted]")`。空闲时 Ctrl+C 退出（见 4.4 与 DESIGN.md 中断一节） | 长跑 bash 命令能被打断；被打断的 turn 协议合法，屏幕出现 `[interrupted]` |
 | **权限确认** | 不做 | 工具直接执行，没有权限确认。ask 方案见 DESIGN.md 权限一节，不是交付项 | 调用工具时立即执行，终端不出现确认 |
 | **/compact 上下文压缩** | 已落地 | 手动 `/compact`、用量超过阈值时自动压、上下文超限时压一次并重试。保留最近一段原文，更早的换成固定分段摘要。`glm-5.3-flash` 没有窗口值，不自动压 | 压缩后屏幕有 `compacted · A → B tokens`；`--resume` 能接上摘要和保留段 |
-| **输入体验** | 未做 | 历史持久化到 `~/.ti/history`（上限 1000 条）；支持 `\` 续行多行输入。TUI 已有进程内 ↑↓ 历史与 Shift+Enter 换行，不是本项 | 重启后方向键↑能翻出上次会话的命令 |
+| **输入体验** | 已落地 | `--resume` / `/resume` 时把该会话里用户发过的消息灌进 ↑ 历史（不单独存文件，pi 同款）；支持 `\` 续行多行输入；`/help` 列出快捷键。前提是摘要与中断不再伪装成用户消息（照 pi：摘要是独立角色，中断标在被打断的回复上）；压缩 prompt 同时换成 pi 的，摘要后附文件清单 | 恢复会话后按 ↑ 能翻出该会话里发过的消息，且不含 `[interrupted]` 和摘要；`a\` 回车再 `b` 回车，模型收到两行 |
 | **token 会话累计** | 已落地 | 从 `messages` 累计 in/out 与调用次数；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到初版之后） | `/cost` 显示累计 in/out token 与会话轮数 |
 | **npm 打包就绪（不发布）** | 部分 | 现状：`scripts/build.mjs`（esbuild minify）→ `bin/ti.js`，`bin:{"ti":"bin/ti.js"}`，`files:["bin"]`，`engines` Node ≥22.18，MIT LICENSE。开发 `npm start` 直跑 `src/`。仍缺：英文优先 README、`npm test` 冒烟 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
 | **冒烟测试** | 未做 | `scripts/smoke.mjs`：内置 mock server（OpenAI 协议）+ 罐头 SSE，跑通「工具调用全链路、配置优先级、`/model`」断言；`npm test` 可跑 | 无真实 API key 时 `npm test` 全绿 |
@@ -77,7 +77,6 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 - 括号粘贴（bracketed paste）、`@` 文件、Tab 路径补全
 - 鼠标滚轮 / 选中复制的应用层处理
 - `/cost` 金额（价格表易过时）
-- 历史持久化到 `~/.ti/history`（仍是「输入体验」那一项）
 
 ## 5. 非功能需求
 
@@ -97,7 +96,7 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 循环层  agentTurn                                （已落地：AbortSignal、finishInterrupted）
 传输层  callLLM 双协议                           （已落地：fetch(signal)、usage）
 工具层  runTool 4 工具                           （已落地：bash 接 AbortSignal）
-待加    /compact、skills、历史落盘
+待加    skills
 ```
 
 - **session**：`<cwd>/.ti/sessions/*.jsonl`。`--resume` 与 `/resume` 只列当前目录。没有 `-c`
@@ -154,7 +153,7 @@ scripts/build.mjs   # 发布构建
 
 初版目标见 §2：日常编码能在 ti 里跑完。待发功能齐了再把 `package.json` 打成 `1.0.0`。
 
-当前已落地：session、`/compact`、中断、token 累计、`/provider`、TUI、打包主干。未做：输入历史、冒烟、skills、打包余项。权限确认不做。
+当前已落地：session、`/compact`、中断、输入体验、token 累计、`/provider`、TUI、打包主干。未做：冒烟、skills、打包余项。权限确认不做。
 
 ## 8. 开放问题
 

@@ -34,7 +34,7 @@
 | 0.0.2 | 缩短商店介绍。之后 git 又进了 TUI、中断、`/cost`、`/provider`、打包主干，号没再加，也没再发 | npm 上的 0.0.2 比现在的 `main` 旧 |
 | 0.0.3 | session 持久化与恢复 | 已发 npm |
 | 0.0.4 | `/compact` 上下文压缩（含自动压缩、超限兜底重试） | 已提交，未发 npm |
-| 0.0.5 | 输入历史落盘 | 未做 |
+| 0.0.5 | 输入体验：恢复会话时回灌 ↑ 历史、`\` 续行、`/help` 快捷键（前提：照 pi 把摘要改成独立角色、中断标成 aborted，压缩 prompt 换成 pi 的，会话格式 v2） | 已提交，未发 npm |
 | 0.0.6 | skills | 未做 |
 | 0.0.7 | 冒烟测试 | 未做 |
 | 0.0.8 | 打包余项（英文 README 等） | 未做 |
@@ -46,4 +46,4 @@
 
 0.0.3（session）已发 npm，落盘可靠性收口也已提交，没另开号。
 
-0.0.4（`/compact`）已提交，发不发 npm 另说。实现在 `src/core/compact.ts`，说明在 `docs/impl/compact.md`。`glm-5.3-flash` 仍没有窗口值，不自动压。下一号是 0.0.5（输入历史落盘），仍先谈需求再写方案。
+0.0.4（`/compact`）已提交，发不发 npm 另说。实现在 `src/core/compact.ts`，说明在 `docs/impl/compact.md`。`glm-5.3-flash` 仍没有窗口值，不自动压。0.0.5（输入体验）已提交，发不发 npm 另说。实现在 `src/cli/tui.ts`、`src/cli/repl.ts`、`src/llm/index.ts` 的 `toLlm`、`src/core/compact.ts`，说明在 `docs/impl/history.md`。会话格式升到 v2：不要用 npm 上的 0.0.3 打开 0.0.5 写过的会话。下一号是 0.0.6（skills），仍先谈需求再写方案。

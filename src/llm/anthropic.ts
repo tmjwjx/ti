@@ -1,7 +1,7 @@
 // Anthropic Messages API（stream）
 // 发出：连续 toolResult 归并成 user；相邻 user 合成一条
 // 收回：按 content_block 下标累积，stop_reason 收成 StopReason
-import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
+import type { AssistantMessage, LlmMessage, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
 
 // 线上 user 内容收成块数组
@@ -26,7 +26,7 @@ function pushUser(out: any[], content: any): void {
 }
 
 // 内部消息收成 Anthropic 线格式
-function toWire(messages: Message[]): any[] {
+function toWire(messages: LlmMessage[]): any[] {
   const out: any[] = [];
   let results: any[] = [];
   const flushResults = () => {
@@ -95,7 +95,7 @@ function toInternalAssistant(
 export async function callAnthropic(
   provider: ProviderConf,
   systemPrompt: string,
-  messages: Message[],
+  messages: LlmMessage[],
   tools: any[],
   onText: (delta: string) => void,
   signal?: AbortSignal,

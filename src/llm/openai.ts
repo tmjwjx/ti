@@ -1,11 +1,11 @@
 // OpenAI chat/completions 兼容协议（stream）
 // 发出：system 单独一条；toolResult 1:1 成 role:"tool"
 // 收回：tool_calls 按 index 拼 arguments，finish_reason 收成 StopReason
-import type { AssistantMessage, Message, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
+import type { AssistantMessage, LlmMessage, ProviderConf, StopReason, TextContent, ToolCall } from "../types.ts";
 import { sseJson } from "./sse.ts";
 
 // 内部消息收成 OpenAI 线格式
-function toWire(systemPrompt: string, messages: Message[]): any[] {
+function toWire(systemPrompt: string, messages: LlmMessage[]): any[] {
   const oaiMessages: any[] = [{ role: "system", content: systemPrompt }];
   for (const m of messages) {
     if (m.role === "user") {
@@ -56,7 +56,7 @@ function toInternalAssistant(
 export async function callOpenAI(
   provider: ProviderConf,
   systemPrompt: string,
-  messages: Message[],
+  messages: LlmMessage[],
   tools: any[],
   onText: (delta: string) => void,
   signal?: AbortSignal,
