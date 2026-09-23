@@ -43,7 +43,16 @@ export type SummaryMessage = {
   files: { read: string[]; modified: string[] };
 };
 
-// 协议认得的三种。summary 和 aborted 在 callLLM 里先翻成这三种
+// 用户 /名字 调用的 skill。body 是调用那一刻读到的全文，之后 SKILL.md 改了也不影响
+export type SkillMessage = {
+  role: "skill";
+  name: string;
+  path: string;
+  body: string;
+  args: string;
+};
+
+// 协议认得的三种。summary、skill、aborted 在 callLLM 里先翻成这三种
 export type LlmMessage = UserMessage | AssistantMessage | ToolResultMessage;
 
-export type Message = LlmMessage | SummaryMessage;
+export type Message = LlmMessage | SummaryMessage | SkillMessage;

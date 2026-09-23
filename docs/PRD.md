@@ -49,7 +49,7 @@ agent loop（流式请求→完整 toolCall 才执行→结果回灌→循环）
 | **token 会话累计** | 已落地 | 从 `messages` 累计 in/out 与调用次数；`/cost` 查看（只统计 token，不做金额——价格表易过时，金额留到初版之后） | `/cost` 显示累计 in/out token 与会话轮数 |
 | **npm 打包就绪（不发布）** | 部分 | 现状：`scripts/build.mjs`（esbuild minify）→ `bin/ti.js`，`bin:{"ti":"bin/ti.js"}`，`files:["bin"]`，`engines` Node ≥22.18，MIT LICENSE。开发 `npm start` 直跑 `src/`。仍缺：英文优先 README、`npm test` 冒烟 | `npm pack --dry-run` 仅含白名单文件、包体 <100KB；`npm i -g` 后 `ti` 在 Node 22.18+ 可用 |
 | **冒烟测试** | 未做 | `scripts/smoke.mjs`：内置 mock server（OpenAI 协议）+ 罐头 SSE，跑通「工具调用全链路、配置优先级、`/model`」断言；`npm test` 可跑 | 无真实 API key 时 `npm test` 全绿 |
-| **skills** | 未做 | 启动时扫描 `~/.ti/skills/*/SKILL.md` 与项目 `.ti/skills/*/SKILL.md`，解析 frontmatter 的 name/description（手写两行解析，不引 yaml 库），把技能清单（名称+一句话）追加进系统提示词；模型按需用现有 read 工具读取完整 SKILL.md——渐进披露，pi 同款机制 | 放一个 SKILL.md 到 skills 目录后，agent 能在对话中识别并正确按技能指示行动 |
+| **skills** | 已落地 | 启动时扫描项目 `.ti/skills/*/SKILL.md` 与 `~/.ti/skills/*/SKILL.md`（同名项目级优先），手写解析 frontmatter，不引 yaml 库；清单（名称、描述、路径）追加进系统提示词，模型按需用现有 read 工具读全文——渐进披露，pi 同款。`/名字 参数` 手动调用（内置命令优先），全文直接进这一轮；`/skills` 列出已加载的与警告 | 放一个 SKILL.md 到 skills 目录后，agent 能在对话中识别并正确按技能指示行动；`/名字` 调用时请求里带上该 skill 全文 |
 | **/provider 命令** | 已落地 | REPL 内 `/provider` 列出已就绪 provider；`/provider <name>` 整套切换。TUI 下无参展开二级列表。`/model` 只切已写入的模型名 | 不重启即可在已配置的厂家间切换 |
 
 ### 4.3 初版之后的候选
@@ -96,14 +96,14 @@ extensions（`~/.ti/extensions/*.ts` 注册自定义工具，参考 pi）；cost
 循环层  agentTurn                                （已落地：AbortSignal、finishInterrupted）
 传输层  callLLM 双协议                           （已落地：fetch(signal)、usage）
 工具层  runTool 4 工具                           （已落地：bash 接 AbortSignal）
-待加    skills
+待加    冒烟测试、打包余项
 ```
 
 - **session**：`<cwd>/.ti/sessions/*.jsonl`。`--resume` 与 `/resume` 只列当前目录。没有 `-c`
 - **中断**：每轮聊天一个 `AbortController`，经 `ctx.signal` 贯穿 fetch 与 bash；TUI 空 Ctrl+C 或 Esc 在 busy 时 `abort()`；`finishInterrupted` 收尾
 - **权限**：工具直接执行，没有权限确认。不设确认钩子，也不弹 ask
 - **/compact**：messages 另发一次请求求摘要 → `messages = [{role:"user", content: 摘要+接续指令}]`
-- **skills**：`buildSystemPrompt()` 时扫描 `~/.ti/skills/` 与 `.ti/skills/`，frontmatter 手写解析 name/description 两行（不引 yaml 库），清单注入系统提示词
+- **skills**：启动时 `loadSkills()` 扫描 `.ti/skills/` 与 `~/.ti/skills/`，清单交给 `buildSystemPrompt()`；`/名字` 存成 `skill` 角色，发请求时翻成 user（详见 `docs/impl/skills.md`）
 - **/provider**：复用 `resolveProvider()`，REPL 内列出或切换 provider；`/model` 只管已写入的模型名
 
 ### 6.2 npm 打包
@@ -145,7 +145,7 @@ docs/               # PRD.md（本文档）· DESIGN.md · ARCHITECTURE.md · RE
 scripts/build.mjs   # 发布构建
 ```
 
-初版仍待加：`core/skills.ts`、`config/paths.ts`、`scripts/smoke.mjs`。不要把权限确认的 `permissions.ts`、`cli/input.ts` 当成交付。
+初版仍待加：`config/paths.ts`、`scripts/smoke.mjs`。不要把权限确认的 `permissions.ts`、`cli/input.ts` 当成交付。
 
 ## 7. 里程碑
 
@@ -153,7 +153,7 @@ scripts/build.mjs   # 发布构建
 
 初版目标见 §2：日常编码能在 ti 里跑完。待发功能齐了再把 `package.json` 打成 `1.0.0`。
 
-当前已落地：session、`/compact`、中断、输入体验、token 累计、`/provider`、TUI、打包主干。未做：冒烟、skills、打包余项。权限确认不做。
+当前已落地：session、`/compact`、中断、输入体验、skills、token 累计、`/provider`、TUI、打包主干。未做：冒烟、打包余项。权限确认不做。
 
 ## 8. 开放问题
 

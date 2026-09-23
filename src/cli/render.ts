@@ -81,6 +81,12 @@ export function replayMessages(
       writeln(dim("[compacted summary]"));
       continue;
     }
+    // 画成用户打的那一行，不铺全文
+    if (m.role === "skill") {
+      writeln("");
+      writeln(`${cyan("❯")} /${m.name}${m.args ? ` ${m.args}` : ""}`);
+      continue;
+    }
     if (m.role === "assistant") {
       let hadText = false;
       for (const b of m.content) {

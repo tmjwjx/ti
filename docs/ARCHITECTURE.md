@@ -53,7 +53,8 @@ src/
   core/
     agent.ts         agentTurn
     session.ts       当前目录 jsonl、pushMessage、list / resume / rename
-    prompt.ts        系统提示词（AGENTS.md / CLAUDE.md）
+    prompt.ts        系统提示词（AGENTS.md / CLAUDE.md、skill 清单）
+    skills.ts        扫 .ti/skills 与 ~/.ti/skills、frontmatter、清单、读全文
   llm/
     index.ts         协议分发
     sse.ts           SSE 帧
@@ -67,7 +68,7 @@ src/
     index.ts         CATALOG、settings、resolveProvider
 ```
 
-尚未落地（见 DESIGN.md）：`skills.ts`、`paths.ts`、冒烟测试。`permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。
+尚未落地（见 DESIGN.md）：`paths.ts`、冒烟测试。`permissions.ts`、`cli/input.ts` 是权限确认的设计稿，产品已决定不做。
 
 ## 启动
 
@@ -154,11 +155,11 @@ flowchart TD
 ]
 ```
 
-`callLLM` 先过 `toLlm()`：`summary` 翻成带前后缀的 user，`aborted` 的 assistant 整条丢掉，相邻 user 合成一条。然后才进协议文件。
+`callLLM` 先过 `toLlm()`：`summary` 翻成带前后缀的 user，`skill` 翻成 `<skill name=… location=…>` 全文加参数的 user，`aborted` 的 assistant 整条丢掉，相邻 user 合成一条。然后才进协议文件。
 
 Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 再合成一条（角色必须交替）。OpenAI `toWire`：`toolResult` 1:1 成 `role:"tool"`；system 单独一条。
 
-压缩摘要是 `{ role: "summary", text, files }`，只存正文和读过、改过的文件清单。会话封面 `version` 从 0.0.5 起是 2，v1 文件被接上时改写成 2。
+压缩摘要是 `{ role: "summary", text, files }`，只存正文和读过、改过的文件清单。`/名字` 调用 skill 存成 `{ role: "skill", name, path, body, args }`，`body` 是调用那一刻的全文。会话封面 `version` 是 1，还没有正式版，格式直接改，不做旧格式兼容。
 
 ## 配置
 
@@ -174,7 +175,7 @@ Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 再�
 
 **readline**（非 TTY）：`> ` 提示，斜杠命令同一套 `dispatch`。没有 AbortController，空闲 Ctrl+C 随 readline 结束。
 
-斜杠：`/clear` `/resume` `/rename` `/model` `/provider` `/setup` `/cost` `/help` `/exit`。未知 `/xxx` 不当用户消息发给模型。会话按项目落在 `<cwd>/.ti/sessions/`，`--resume` 与 `/resume` 共用 `pickAndResume()`。
+斜杠：`/clear` `/resume` `/rename` `/model` `/provider` `/setup` `/cost` `/skills` `/help` `/exit`。内置命令先解析，对不上再找同名 skill（`/名字 参数`），都没有就提示 unknown，不发给模型。命令后面带了参数时，TUI 回车提交整行，列表只补全命令本身。会话按项目落在 `<cwd>/.ti/sessions/`，`--resume` 与 `/resume` 共用 `pickAndResume()`。
 
 ## 关键保护
 
@@ -191,4 +192,4 @@ Anthropic `toWire`：连续 `toolResult` 归并成一条 user；相邻 user 再�
 
 ## 有意未做
 
-`-c` / `--continue`、skills、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。输入历史不单独存文件，恢复会话时从会话回灌。
+`-c` / `--continue`、skill 的 `/reload` 与其他目录、冒烟测试、权限确认、MCP、子 agent、plan mode、扩展系统。TUI 也还没有真追加滚动、steering、括号粘贴。输入历史不单独存文件，恢复会话时从会话回灌。

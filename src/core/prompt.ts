@@ -1,9 +1,10 @@
 // 系统提示词
 import { readFile } from "node:fs/promises";
 import { TOOLS } from "../tools/index.ts";
+import { skillsPrompt, type SkillSet } from "./skills.ts";
 
-// 拼给模型的系统提示
-export async function buildSystemPrompt(): Promise<string> {
+// 拼给模型的系统提示。skill 清单放最后，只有名字、描述、路径
+export async function buildSystemPrompt(skills: SkillSet): Promise<string> {
   let projectContext = "";
   for (const file of ["AGENTS.md", "CLAUDE.md"]) {
     try {
@@ -28,11 +29,11 @@ Guidelines:
 - Verify your work: build/test after changing code when possible
 
 Current working directory: ${process.cwd()}
-Current date: ${new Date().toISOString().slice(0, 10)}${projectContext}`;
+Current date: ${new Date().toISOString().slice(0, 10)}${projectContext}${skillsPrompt(skills)}`;
 }
 
 // 中文对照（不发给模型）：
 // 你是 ti 里的编程助手：读写改文件、跑命令
 // 可用工具：由 TOOLS 的 name + description 生成
 // 准则：简短；写出路径；用 bash 做 ls、rg、find；小改用 edit，新建或整文件用 write；能编测就编测
-// 当前目录与日期；有 AGENTS.md 或 CLAUDE.md 再追加
+// 当前目录与日期；有 AGENTS.md 或 CLAUDE.md 再追加；最后是 skill 清单（见 skills.ts）

@@ -13,7 +13,6 @@
 import {
   chmodSync,
   closeSync,
-  existsSync,
   fsyncSync,
   ftruncateSync,
   linkSync,
@@ -34,7 +33,7 @@ import { randomBytes } from "node:crypto";
 import type { Message, StopReason, SummaryMessage, TextContent, ToolCall } from "../types.ts";
 import { getProvider } from "../config/index.ts";
 
-const META_VERSION = 2;
+const META_VERSION = 1;
 const HEX_LEN = 4;
 const SLUG_CHARS = 40;
 const MAX_BYTES = 32 * 1024 * 1024;
@@ -122,11 +121,24 @@ function fsyncDir(file: string): void {
   }
 }
 
-// 用户消息收成纯文本
-function userText(msg: Message): string {
+// 用户亲手打的那一行：user 取文本，skill 取 /名字 参数。其他角色不是用户输入，返回空串
+export function inputText(msg: Message): string {
+  if (msg.role === "skill") return msg.args ? `/${msg.name} ${msg.args}` : `/${msg.name}`;
   if (msg.role !== "user") return "";
   if (typeof msg.content === "string") return msg.content;
   return msg.content.filter((b): b is TextContent => b.type === "text").map((b) => b.text).join("");
+}
+
+// 会话名取第一条用户输入。落盘行还没解析，先按 role 筛再收成消息
+function firstInput(entries: any[]): string {
+  for (const e of entries) {
+    if (e?.type !== "message" || (e.role !== "user" && e.role !== "skill")) continue;
+    const msg = asMessage(e);
+    if (!msg) continue;
+    const text = firstLine(inputText(msg));
+    if (text) return text;
+  }
+  return "";
 }
 
 // 取第一行，去掉首尾空白
@@ -153,15 +165,6 @@ function hex4(): string {
 function hexOf(file: string): string {
   const m = basename(file).match(new RegExp(`_([0-9a-f]{${HEX_LEN}})\\.jsonl$`, "i"));
   return m ? m[1]!.toLowerCase() : hex4();
-}
-
-// 把 fd 刷到盘上再关
-function fsyncClose(fd: number): void {
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
 }
 
 // 独占建一份还不存在的 jsonl
@@ -253,35 +256,6 @@ function ensureDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodQuiet(parent, 0o700);
   chmodQuiet(dir, 0o700);
-  ensureGitignore();
-}
-
-// 仓库里若还没忽略 .ti，补一行，避免会话和密钥被提交
-function ensureGitignore(): void {
-  if (!existsSync(join(process.cwd(), ".git"))) return;
-  const gi = join(process.cwd(), ".gitignore");
-  if (existsSync(gi)) {
-    try {
-      if (!statSync(gi).isFile()) return;
-    } catch {
-      return;
-    }
-  }
-  let text = "";
-  try {
-    text = readFileSync(gi, "utf8");
-  } catch {
-    text = "";
-  }
-  if (/(?:^|[\n\r])\s*\.ti\/?\s*(?:[#\n\r]|$)/m.test(text)) return;
-  const prefix = text && !text.endsWith("\n") ? "\n" : "";
-  try {
-    const fd = openSync(gi, "a", 0o644);
-    writeAll(fd, prefix + ".ti/\n");
-    fsyncClose(fd);
-  } catch {
-    // 忽略：只读仓库
-  }
 }
 
 // 写进 meta 的厂家快照。读不到就空着；恢复时不会拿来 setProvider
@@ -351,6 +325,14 @@ function asMessage(raw: any): Message | undefined {
   if (raw.role === "summary" && typeof raw.text === "string" && raw.text.trim()) {
     return { role: "summary", text: raw.text, files: asFiles(raw.files) };
   }
+  if (
+    raw.role === "skill" &&
+    typeof raw.name === "string" && raw.name &&
+    typeof raw.path === "string" &&
+    typeof raw.body === "string" && raw.body
+  ) {
+    return { role: "skill", name: raw.name, path: raw.path, body: raw.body, args: typeof raw.args === "string" ? raw.args : "" };
+  }
   if (raw.role === "toolResult" && typeof raw.toolCallId === "string") {
     return {
       role: "toolResult",
@@ -384,7 +366,7 @@ function repairMessages(messages: Message[]): Message[] {
     pending = [];
   };
   for (const m of messages) {
-    if (m.role === "user" || m.role === "summary") {
+    if (m.role === "user" || m.role === "summary" || m.role === "skill") {
       flush();
       out.push(m);
       continue;
@@ -508,15 +490,6 @@ function rewriteMeta(file: string, patch: Record<string, unknown>): void {
       return;
     }
   }
-}
-
-// v1 文件被接上之后也可能写出 summary 和 aborted。先把封面改成当前版本，每份只改一次
-function upgradeSession(file: string): void {
-  const ver = metaVersion(file);
-  if (ver === undefined || ver >= META_VERSION) return;
-  const st = statSync(file);
-  if (st.size > MAX_BYTES) return;
-  rewriteMeta(file, { version: META_VERSION });
 }
 
 // 追加一行并 fsync。已有文件加上本行超过上限就拒绝，避免无限涨
@@ -690,10 +663,9 @@ export function openSession(file: string): SessionWriter {
   assertReadable(file);
   const entries = readEntries(file);
   const meta = entries.find((e) => e.type === "meta");
-  const first = afterCompact(entries).find((e) => e.type === "message" && e.role === "user");
   const name =
     (typeof meta?.name === "string" && meta.name) ||
-    (first ? firstLine(userText(first as Message)) : "") ||
+    firstInput(afterCompact(entries)) ||
     basename(file, ".jsonl");
   return makeWriter(file, name);
 }
@@ -707,12 +679,6 @@ export function bindSession(w: SessionWriter): void {
   }
   // 先占新锁，失败则旧档仍握在手里，避免换档中途两头都没锁
   acquireLock(w.file);
-  try {
-    upgradeSession(w.file);
-  } catch (e) {
-    releaseLock(w.file);
-    throw e;
-  }
   if (writer) releaseLock(writer.file);
   writer = w;
 }
@@ -758,10 +724,7 @@ function peekName(file: string): string {
       const raw = parseLine(line);
       if (!raw) continue;
       if (raw.type === "meta" && typeof raw.name === "string" && raw.name) metaName = raw.name;
-      if (raw.type === "message" && raw.role === "user" && !firstUser) {
-        const msg = asMessage(raw);
-        if (msg && msg.role === "user") firstUser = firstLine(userText(msg));
-      }
+      if (!firstUser) firstUser = firstInput([raw]);
       if (metaName && firstUser) break;
     }
     return metaName || firstUser || basename(file, ".jsonl");
@@ -824,12 +787,11 @@ export function listSessions(limit = 10): SessionInfo[] {
         const entries = readEntries(row.file);
         const live = afterCompact(entries);
         const meta = entries.find((e) => e.type === "meta");
-        const first = live.find((e) => e.type === "message" && e.role === "user");
         items.push({
           file: row.file,
           name:
             (typeof meta?.name === "string" && meta.name) ||
-            (first ? firstLine(userText(first as Message)) : "") ||
+            firstInput(live) ||
             basename(row.file, ".jsonl"),
           mtime: row.mtime,
           count: live.filter((e) => e.type === "message").length,
@@ -863,8 +825,7 @@ export function pushMessage(messages: Message[], msg: Message): void {
   messages.push(msg);
   try {
     if (!writer) {
-      const n = msg.role === "user" ? firstLine(userText(msg)) : undefined;
-      writer = createSession(n || undefined);
+      writer = createSession(firstLine(inputText(msg)) || undefined);
     }
     writer.append({ type: "message", ...msg });
   } catch (e) {

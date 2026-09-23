@@ -23,8 +23,11 @@ Sessions are stored in `.ti/sessions/` of the directory you start from. `--resum
 /provider   switch configured provider
 /setup      add or edit provider
 /cost       token usage
+/skills     list skills
 /help       list commands
 /exit       quit
 ```
 
-Start it in the project directory you want to work on. Add `.ti/` to that project's `.gitignore`.
+Start it in the project directory you want to work on.
+
+Skills: put `SKILL.md` under `.ti/skills/<name>/` (this project) or `~/.ti/skills/<name>/` (all projects). The model reads a skill when the task matches its description; `/<name> args` runs it directly. Skills are loaded at startup. A skill can make the model run any command, so only add ones you trust.

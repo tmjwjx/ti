@@ -39,7 +39,9 @@ ti/
     ├── core/
     │   ├── agent.ts          #   agentTurn（llm × tools）
     │   ├── session.ts        #   当前目录 jsonl、pushMessage、list / resume / rename
-    │   └── prompt.ts         #   系统提示词（AGENTS.md/CLAUDE.md）
+    │   ├── compact.ts        #   上下文压缩
+    │   ├── skills.ts         #   .ti/skills 与 ~/.ti/skills 扫描、清单、读全文
+    │   └── prompt.ts         #   系统提示词（AGENTS.md/CLAUDE.md、skill 清单）
     ├── llm/
     │   ├── index.ts          #   callLLM() 协议分发
     │   ├── sse.ts            #   sseJson() 通用 SSE 帧解析
@@ -57,7 +59,6 @@ ti/
 
 ```
 scripts/smoke.mjs             # 冒烟测试
-src/core/skills.ts            # skills
 src/config/paths.ts           # 测试隔离用 TI_HOME
 ```
 
@@ -95,10 +96,10 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 
 `cwd` 就是 `process.cwd()`。默认名字取首条用户句第一行：做成 slug（控制字符丢掉，空白和 `/ \ : * ? " < > |` 换成 `-`，去掉头尾点，截到约 40 字）+ `_` + 4 位 hex。空句则只用 hex。meta 可带 `name`。`/rename 新名字` 写入 `name`，并把当前文件改成新 slug（hex 后缀保留），`writer.file` 一起改。列表优先显示 `name`，否则用首句。`.ti`、`sessions` 为 `0o700`，jsonl `0o600`。`listSessions` 先按 mtime 排序再解析前 10 份。settings 仍在 `~/.ti/settings.json`。
 
-覆写走临时文件 + fsync + rename。追加后 fsync。文件若不以换行结尾，下一次追加先补一个换行，避免半截 JSON 粘住新行。撤回最后一条按字节截断，不把中文按字符下标重写。同一份 jsonl 带 `.lock`（pid），两份 ti 不能同时写。改名用硬链接，先占新锁再放开旧名，不覆盖已有文件。恢复时补齐缺失的 toolResult、丢掉对不上的结果。单文件超过 32MB 拒绝再追加，读的时候只取尾部。打开路径必须落在当前 `sessions` 目录。若当前目录是 git 仓库且 `.gitignore` 还没有 `.ti/`，建档时补一行。落盘失败不打断对话，提示 `session not saved`。
+覆写走临时文件 + fsync + rename。追加后 fsync。文件若不以换行结尾，下一次追加先补一个换行，避免半截 JSON 粘住新行。撤回最后一条按字节截断，不把中文按字符下标重写。同一份 jsonl 带 `.lock`（pid），两份 ti 不能同时写。改名用硬链接，先占新锁再放开旧名，不覆盖已有文件。恢复时补齐缺失的 toolResult、丢掉对不上的结果。单文件超过 32MB 拒绝再追加，读的时候只取尾部。打开路径必须落在当前 `sessions` 目录。不碰用户项目的 `.gitignore`。落盘失败不打断对话，提示 `session not saved`。
 
 ```jsonl
-{"type":"meta","version":2,"cwd":"/Users/mac/proj/foo","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-09-16T12:00:00.000Z","name":"帮我改个登录bug"}
+{"type":"meta","version":1,"cwd":"/Users/mac/proj/foo","provider":"deepseek","model":"deepseek-v4-flash","createdAt":"2026-09-16T12:00:00.000Z","name":"帮我改个登录bug"}
 {"type":"message","role":"user","content":"帮我改个 bug"}
 {"type":"message","role":"assistant","content":[...],"stopReason":"stop","usage":{"input":100,"output":40}}
 {"type":"message","role":"toolResult","toolCallId":"...","toolName":"read","content":"...","isError":false}
@@ -107,7 +108,7 @@ main.ts         唯一装配点：依赖所有层，完成参数解析与分发
 {"type":"message","role":"summary","text":"## Goal\n...","files":{"read":[...],"modified":[...]}}
 ```
 
-读的时候只取最后一个 compact 之后。`version` 从 0.0.5 起是 2（多了 `summary` 角色和 `aborted` 结束原因）；版本号比自己高的文件拒绝打开，v1 文件被接上时先把 meta 改写成 2。详见 `docs/impl/history.md` §3.2。
+读的时候只取最后一个 compact 之后。还没有正式版，也没有存量文件，格式直接改，不做旧格式兼容；`version` 保持 1，版本号比自己高的文件拒绝打开。
 
 #### 模块（`src/core/session.ts`）
 
@@ -179,7 +180,7 @@ REPL 用户句、agentTurn 里的 assistant（含被打断的）/ toolResult，�
 - 工具执行阶段被打断（assistant 已完整收到）：没跑的工具各补一条 `Error: aborted by user`——这条 assistant 要发给模型，调用必须有结果，否则下一轮 400
 - 请求中被打断（半截字、半截工具调用、零字节），或两次请求之间：存一条 `stopReason: "aborted"` 的 assistant，内容是已经收到的部分（可以为空）。不补工具结果，不写额外消息。发请求时 `toLlm()` 整条跳过，模型看到的是「上一个问题 + 新输入」合成的一条 user
 
-零字节 abort 不 throw 出循环，由收尾写入空的 aborted assistant。0.0.4 及之前写的是 `user("[interrupted]")`，旧会话里的照旧当 user。
+零字节 abort 不 throw 出循环，由收尾写入空的 aborted assistant。
 
 **触发（TUI）**：没有 Ctrl+D。退出和打断只走 Ctrl+C：有字清空 → 向导取消 → busy 打断 → 空闲退出。Esc：向导取消 → 二级列表往回退 → busy 打断（不丢队列）→ 清空。`/exit` 退出。非 TTY readline 仍是空闲 Ctrl+C 退出。AbortSignal 贯穿 `fetch` 与 bash。
 
@@ -300,7 +301,7 @@ async function confirmToolCall(tu: ToolUse): Promise<"allow" | "deny">
 - 中断：被打断的 assistant 标 `stopReason: "aborted"`，不写额外消息，发请求时整条跳过。中断不能当工具回复写：大多数中断发生时没有工具调用，工具回复没有 id 可挂，两个协议都会 400。
 - 摘要：单独的 `summary` 角色，只存正文和文件清单，前后缀在发请求时加。压缩 prompt 一并换成 pi 的。
 
-翻译集中在 `callLLM` 里的 `toLlm()`：摘要翻成 user、跳过 aborted、合并相邻 user。会话格式版本 1 → 2。旧会话里的伪装 user 不迁移。
+翻译集中在 `callLLM` 里的 `toLlm()`：摘要翻成 user、跳过 aborted、合并相邻 user。
 
 这一步顺带让恢复时的重放和运行时一致：被打断处画半截内容加一行 `[interrupted]`，摘要画一行提示，不再把摘要全文画成用户消息。
 
@@ -316,18 +317,23 @@ TUI 下 `/help` 在命令列表后面加一段常用快捷键（send、newline�
 
 从 `messages` 里 assistant 的 `usage` 求和（`tokenTotals`），不另维护一份累计器。`lastTurn` 是最近一次 `agentTurn` 的差值。`/cost` 打印：`session  12,345 in · 6,789 out · 8 calls · last turn …`。footer 用 `turn ↑↓` / `session ↑↓`。不含金额（v1.1 再做价格表）。
 
-### skills（未做）
+### skills（已落地 · 0.0.6）
 
-**扫描**：`buildSystemPrompt()` 内同步扫描 `~/.ti/skills/*/SKILL.md` 与 `<cwd>/.ti/skills/*/SKILL.md`（`readdirSync` + `existsSync`，失败静默跳过）。
+> 实现文档另开一页：`docs/impl/skills.md`（解析规则、各处接 `skill` 角色的改法、落点清单都在那里）。本节只留设计取舍。
 
-**frontmatter 解析**：文件以 `---` 开头 → 读到下一个 `---`；只提取单行 `name:` 与 `description:`（手写两行解析，**不引 yaml 库**）；`name` 缺省取目录名。上限 20 个，description 截断 200 字符。
+参考了三家：pi 在提示词里列清单、模型用 `read` 读全文，另有 `/skill:名字` 手动调；Codex 同样列清单，另加「用户点名就必须读」；dsh 用专门的 `skill` 工具。ti 取 pi 的做法，不新增工具。
 
-**注入**（pi 同款渐进披露，模型用现有 read 工具按需读全文）：
+**扫描**：启动时扫 `<cwd>/.ti/skills/<名字>/SKILL.md`，再扫 `~/.ti/skills/<名字>/SKILL.md`，同名项目级优先。只看当前目录，只认一层，跟随符号链接。只扫一次，新加的要重启。
 
-```
-Available skills (when a task matches a skill, read its SKILL.md with the read tool first):
-- commit-helper: 生成规范 commit message (~/.ti/skills/commit-helper/SKILL.md)
-```
+**frontmatter**：手写解析，不引 yaml 库。认 `name`（缺省取目录名）、`description`（必填，缺了不加载）、`disable-model-invocation`。支持单行、带引号、`|` / `>` 多行、不带引号的换行续写、行尾 `#` 注释。名字不合规、描述超 1024 只警告（pi 的规则）。
+
+**进系统提示词**：照 pi 的 `<available_skills>` XML 和开头说明，只列名字、描述、路径。不加 Codex 的「用户点名就先读」，避免 `/名字` 注入全文后模型再读一遍。`disable-model-invocation` 的不列。清单超过 2 万字符的部分不列，仍可手动调。
+
+**`/名字 参数`**：照 dsh，不加前缀，skill 叫 `aaa` 就是 `/aaa`。内置命令先解析，对不上才找 skill；和内置命令同名的 skill 不能这样调，`/skills` 里有警告，模型照样能读。读出全文和参数一起在这一轮发给模型。会话里存成单独的 `skill` 角色，带调用那一刻的全文，之后改了 `SKILL.md` 也不影响已有会话；发请求时 `toLlm()` 翻成 pi 那种 `<skill name=… location=…>` 的 user 消息。屏幕和 ↑ 历史显示成用户打的原样。
+
+**`/skills`**：列出已加载的、来自哪个目录、有没有被隐藏或挤出清单，以及警告。
+
+**顺带修**：TUI 命令列表回车会丢参数（`/rename foo` 只提交了 `/rename`），改成带参数时提交整行。
 
 ### /provider 命令（已落地）
 

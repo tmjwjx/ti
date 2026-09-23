@@ -722,6 +722,12 @@ export function openTui(): Tui {
         paint();
         return;
       }
+      // 命令后面已经带了参数（/rename foo）：列表只管补全命令本身，整行照发
+      // 二级列表项自己带参数（/model xxx），走下面那条
+      if (paletteOpen && /\s/.test(input.trim()) && !lookup?.(input)) {
+        submit(input);
+        return;
+      }
       if (paletteOpen && found[paletteIndex]) {
         const name = found[paletteIndex]!.name;
         // 还在一级（/mo）且该项有二级：展开成 `/model `，不要把 /model 当命令交出去

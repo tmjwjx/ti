@@ -14,8 +14,7 @@
 | 摘要怎么存 | 照 pi：单独的 `summary` 角色，只存正文和文件清单。前后缀在发请求时加 |
 | 压缩 prompt | 全部换成 pi 的：system、首次摘要、合并旧摘要、序列化格式、前后缀 |
 | 文件清单 | 照 pi：代码从被压掉的工具调用里统计读过、改过的文件，贴在摘要后面，多次压缩合并 |
-| 会话格式版本 | 1 → 2 |
-| 旧会话里的 `user("[interrupted]")` 和 0.0.4 的摘要 | 不按内容识别迁移，照旧当 user 消息 |
+| 旧格式兼容 | 不做。还没有正式版、没有存量文件，格式直接改 |
 | ↑ 历史上限 | 1000 条，连续重复只留一条 |
 | `\` 续行 | TUI 与管道两条路都做 |
 | `/help` | 加快捷键段，只在 TUI 里打 |
@@ -57,7 +56,6 @@
 | 再次压缩是合并 | §3.2 | 连压两次，第二次请求里旧摘要在 `<previous-summary>` 里，结果仍是一份六段摘要 |
 | 文件清单 | §3.2 | 压掉的那段里 `read` 过 A、`edit` 过 B，摘要后面有 `<read-files>A</read-files>` 和 `<modified-files>B</modified-files>` |
 | 重放和运行时一致 | §3.1–§3.2 | 恢复后屏幕上，被打断处是半截内容加一行灰色 `[interrupted]`；摘要是一行灰色提示，不再画成 `❯` 全文 |
-| 旧版不会悄悄读坏新文件 | §3.3 | 用 0.0.4 打开 0.0.5 写过的会话，报 `session format v2 is newer than this ti` |
 | `\` 续行 | §3.5 | 输入 `a\` 回车，不发送，光标到下一行；再输 `b` 回车，模型收到 `a\nb` |
 | 快捷键可见 | §3.6 | TUI 里 `/help` 在命令列表下面列出快捷键，含 Shift+Enter |
 
@@ -213,32 +211,18 @@ Do NOT continue the conversation. Do NOT respond to any questions in the convers
 
 最后一行是顺带修掉的小问题：现在压缩过、又没有 `meta.name` 的会话，列表里显示的名字是摘要的前导语。
 
-### 3.4 会话格式 v2
+### 3.4 会话文件长什么样
 
-`META_VERSION` 从 1 改成 2。`assertReadable` 不用改：它本来就拒绝打开版本号比自己高的文件，所以 0.0.4 读到 v2 会报错，而不是把 `summary` 行丢掉、把 `aborted` 当成 `stop`。
-
-新文件长这样：
+还没有正式版、没有存量文件，格式直接改，不升版本号，也不做旧格式兼容。新文件长这样：
 
 ```jsonl
-{"type":"meta","version":2,...}
+{"type":"meta","version":1,...}
 {"type":"message","role":"user","content":"帮我改 read.ts"}
 {"type":"message","role":"assistant","content":[{"type":"text","text":"先看一下"}],"stopReason":"aborted","usage":{"input":0,"output":0}}
 {"type":"message","role":"user","content":"换个思路"}
 {"type":"compact","createdAt":"..."}
 {"type":"message","role":"summary","text":"## Goal\n...","files":{"read":["src/core/session.ts"],"modified":["src/core/compact.ts"]}}
 ```
-
-**旧文件接着写**：v1 文件被 `/resume` 接上之后，也可能写进 `summary` 和 `aborted`。所以 `bindSession` 占到锁之后，如果文件的 meta 版本小于 2，先把 meta 那一行原子改写成 2，再返回。`rewriteMetaName` 改成通用的 `rewriteMeta(file, patch)`，改名和升版本共用。
-
-- 改写失败：放掉新锁，旧会话仍握在手里，异常抛给 `pickAndResume`，它已经会红字报错、不换档。
-- 文件超过 32MB：跳过升级。这种文件本来就拒绝追加，写不进新内容。
-- 找不到 meta 行：跳过升级，和现在读版本号的逻辑一致（当成没有版本）。
-
-每份 v1 文件只改写一次。
-
-npm 上的 0.0.3 没有版本检查，读到 v2 文件会出错。这一点挡不住，写进发版说明：不要用 0.0.3 打开 0.0.5 写过的会话。
-
-**旧内容不迁移**：v1 里的 `user("[interrupted]")` 和 0.0.4 的摘要 user 消息，读回来还是 user，发给模型的内容和 0.0.4 一样。影响是恢复旧会话后 ↑ 能翻到它们、重放时摘要仍画成全文。新会话不会再有。按内容识别迁移就又回到靠字符串判断，不做。
 
 ### 3.5 ↑ 历史回灌
 
@@ -294,7 +278,7 @@ keys
 | `src/llm/anthropic.ts` / `openai.ts` | 入参类型改成 `LlmMessage[]` |
 | `src/core/agent.ts` | `finishInterrupted` 按 §3.1 两种情况；`unmatchedToolCalls` 跳过 aborted |
 | `src/core/compact.ts` | 换成 pi 的 system prompt、两段指令、序列化格式；拆出旧摘要放 `<previous-summary>`；文件清单统计与合并；`wrapSummary` 返回 `summary` 角色；`estimateTokens` 处理 `summary`；删掉中文前导语和 `<compacted-summary>` |
-| `src/core/session.ts` | `META_VERSION = 2`；`STOPS` 加 `aborted`；`asMessage` 认 `summary`；`repairMessages` 按 §3.3；`rewriteMeta` 通用化；`bindSession` 升级 v1；`commitCompact` 参数类型 |
+| `src/core/session.ts` | `STOPS` 加 `aborted`；`asMessage` 认 `summary`；`repairMessages` 按 §3.3；`rewriteMetaName` 改成通用的 `rewriteMeta`；`commitCompact` 参数类型 |
 | `src/cli/render.ts` | `replayMessages` 画 `summary` 与 aborted |
 | `src/cli/tui.ts` | `remember()`；`submit` 改调它；`addHistory()`；Enter 的 `\` 续行 |
 | `src/cli/repl.ts` | `pickAndResume` 回灌；readline 循环的 `\` 续行；`KEYS` 与 `/help` |
@@ -308,13 +292,11 @@ keys
 - **漏改一处分支**：§3.3 表里标了「崩」「悄悄丢掉」的几处必须改。没有 `tsc`，靠编辑器和 CR。
 - **模型看不到被打断的半截回复**：照 pi 的取舍。用户接着说「不对，别那样改」时，模型不知道「那样」指什么。
 - **摘要变成英文**：pi 的 prompt 是英文的，中文对话压出来的摘要多半是英文，或者中英混杂。对模型接续没有影响，只是 `cat` 会话时读起来不一样。
-- **npm 0.0.3 打开 v2 文件**：没有版本检查，会出错。写进发版说明。
-- **v1 文件升级是整文件改写**：每份一次，≤32MB，走原子写。改写中途崩掉，原件不受影响（先写临时文件再 rename）。
 - **压缩过的会话 ↑ 只剩保留段的输入**：回灌方案的固有代价。
 
 ## 5. 不做
 
-全局输入历史文件（`~/.ti/history.jsonl`）、Ctrl+R 反向搜索、按内容迁移旧会话、`/history` 命令、括号粘贴、pi 的 split turn（一轮太大时拆成前后两段分别摘要）、摘要请求的输出上限（pi 是预留量的 80%）。
+全局输入历史文件（`~/.ti/history.jsonl`）、Ctrl+R 反向搜索、`/history` 命令、括号粘贴、pi 的 split turn（一轮太大时拆成前后两段分别摘要）、摘要请求的输出上限（pi 是预留量的 80%）。
 
 以后真要跨会话历史：TUI 只认 `addHistory(lines)`，启动时多一个数据来源往里灌即可，§3.5 不用推翻。
 

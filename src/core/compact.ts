@@ -142,6 +142,7 @@ export function estimateTokens(msg: Message): number {
   if (msg.role === "summary") {
     return estimateText(msg.text) + estimateText(msg.files.read.join("\n")) + estimateText(msg.files.modified.join("\n"));
   }
+  if (msg.role === "skill") return estimateText(msg.body) + estimateText(msg.args);
   if (msg.role === "user") return estimateText(textOf(msg.content));
   if (msg.role === "toolResult") return estimateText(msg.content);
   let n = 0;
@@ -215,6 +216,9 @@ function serialize(messages: Message[]): string {
     if (m.role === "user") {
       const text = textOf(m.content);
       if (text) parts.push(`[User]: ${text}`);
+    } else if (m.role === "skill") {
+      parts.push(`[User]: /${m.name}${m.args ? ` ${m.args}` : ""}`);
+      parts.push(`[Skill ${m.name}]: ${clipResult(m.body)}`);
     } else if (m.role === "toolResult") {
       if (m.content) parts.push(`[Tool result]: ${clipResult(m.content)}`);
     } else if (m.role === "assistant") {

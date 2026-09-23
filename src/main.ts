@@ -3,8 +3,9 @@
 import type { Message } from "./types.ts";
 import { isProviderReady, resolveProvider, setProvider, settings } from "./config/index.ts";
 import { buildSystemPrompt } from "./core/prompt.ts";
+import { loadSkills } from "./core/skills.ts";
 import { createTerminalUI } from "./cli/render.ts";
-import { pickAndResume, repl } from "./cli/repl.ts";
+import { commandNames, pickAndResume, repl } from "./cli/repl.ts";
 import { openTui } from "./cli/tui.ts";
 import type { Tui } from "./cli/tui.ts";
 import { FormAbort } from "./cli/form.ts";
@@ -82,7 +83,9 @@ async function main() {
       quit(tui, 1);
     }
 
-    const systemPrompt = await buildSystemPrompt();
+    // 只扫这一次。系统提示词整个进程不变，新加的 skill 要重启
+    const skills = loadSkills(commandNames());
+    const systemPrompt = await buildSystemPrompt(skills);
     const messages: Message[] = [];
     // 厂家已经定了再挑会话。恢复不切 provider，meta 里的只是当时记录
     if (resume) {
@@ -90,9 +93,9 @@ async function main() {
       await pickAndResume(messages, say, tui);
     }
     if (tui) {
-      await repl(messages, { systemPrompt, ui: createTerminalUI(tui) }, tui);
+      await repl(messages, { systemPrompt, ui: createTerminalUI(tui) }, skills, tui);
     } else {
-      await repl(messages, { systemPrompt, ui: createTerminalUI() });
+      await repl(messages, { systemPrompt, ui: createTerminalUI() }, skills);
     }
   } finally {
     tui?.close();

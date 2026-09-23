@@ -15,9 +15,11 @@ import {
 import { agentTurn, type AgentContext } from "../core/agent.ts";
 import { distrustUsage, resetTrust, runCompact, shouldAutoCompact } from "../core/compact.ts";
 import { isContextOverflowError } from "../llm/index.ts";
+import { readSkillBody, type Skill, type SkillSet } from "../core/skills.ts";
 import {
   bindSession,
   endSession,
+  inputText,
   isSessionPath,
   listSessions,
   loadMessages,
@@ -46,9 +48,54 @@ export const COMMANDS = [
   { name: "/provider", hint: "switch configured provider" },
   { name: "/setup", hint: "add or edit provider" },
   { name: "/cost", hint: "token usage" },
+  { name: "/skills", hint: "list skills" },
   { name: "/help", hint: "list commands" },
   { name: "/exit", hint: "quit" },
 ];
+
+// 内置命令名（不带 /）。和它们同名的 skill 不能用 /名字 调
+export function commandNames(): string[] {
+  return [...COMMANDS.map((c) => c.name.slice(1)), "quit"];
+}
+
+// /名字 参数 里的 skill。内置命令已经在前面处理过，这里只剩能手动调的
+function skillOf(line: string, skills: SkillSet): { skill: Skill; args: string } | undefined {
+  if (!line.startsWith("/")) return undefined;
+  const cut = line.search(/\s/);
+  const name = (cut < 0 ? line : line.slice(0, cut)).slice(1);
+  const skill = skills.skills.find((s) => s.invocable && s.name === name);
+  if (!skill) return undefined;
+  return { skill, args: cut < 0 ? "" : line.slice(cut).trim() };
+}
+
+// 命令列表里的 skill 项，排在内置命令后面
+function skillCommands(skills: SkillSet) {
+  return skills.skills
+    .filter((s) => s.invocable)
+    .map((s) => ({ name: `/${s.name}`, hint: s.description.replace(/\s+/g, " ").slice(0, 60) }));
+}
+
+// /skills：名字、来源、状态、描述，最后是警告
+function printSkills(skills: SkillSet, say: Say): void {
+  if (!skills.skills.length) {
+    say(dim("no skills · put SKILL.md under .ti/skills/<name>/ or ~/.ti/skills/<name>/"));
+  } else {
+    const width = Math.min(24, Math.max(...skills.skills.map((s) => s.name.length)));
+    for (const s of skills.skills) {
+      const flags = [s.hidden ? "hidden" : "", !s.hidden && !s.listed ? "not listed" : "", s.invocable ? "" : "no command"]
+        .filter(Boolean)
+        .map((f) => `(${f}) `)
+        .join("");
+      const desc = s.description.replace(/\s+/g, " ").slice(0, 80);
+      say(dim(`${s.name.padEnd(width)}  ${s.source.padEnd(7)}  ${flags}${desc}`));
+    }
+  }
+  if (skills.warnings.length) {
+    say("");
+    say(dim("warnings"));
+    for (const w of skills.warnings) say(dim(`  ${w}`));
+  }
+}
 
 // 只在 TUI 的 /help 里打。管道没有这些键
 const KEYS: [string, string][] = [
@@ -114,14 +161,11 @@ function sessionLabel(s: SessionInfo): string {
   return `${title}  ·  ${s.count} msgs  ·  ${when}`;
 }
 
-// 用户亲手打的话。摘要和被打断的回复不是 user，天然不在里面
+// 用户亲手打的话，skill 调用按 /名字 参数 还原。摘要和被打断的回复不在里面
 function typedByUser(messages: Message[]): string[] {
   const out: string[] = [];
   for (const m of messages) {
-    if (m.role !== "user") continue;
-    const text = typeof m.content === "string"
-      ? m.content
-      : m.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    const text = inputText(m);
     if (text.trim()) out.push(text);
   }
   return out;
@@ -308,10 +352,15 @@ async function dispatch(
   messages: Message[],
   ctx: AgentContext,
   say: Say,
+  skills: SkillSet,
   tui?: Tui,
   signal?: AbortSignal,
 ): Promise<"exit" | "cont"> {
   if (line === "/exit" || line === "/quit") return "exit";
+  if (line === "/skills") {
+    printSkills(skills, say);
+    return "cont";
+  }
   if (line === "/help") {
     for (const c of COMMANDS) say(dim(`${c.name.padEnd(12)} ${c.hint}`));
     if (tui) {
@@ -413,27 +462,45 @@ async function dispatch(
     return "cont";
   }
   if (line.startsWith("/")) {
-    say(dim(`unknown command ${line.split(/\s/)[0]}  ·  type / for the list`));
+    // 内置命令都没接住，才看是不是 skill
+    const hit = skillOf(line, skills);
+    if (!hit) {
+      say(dim(`unknown command ${line.split(/\s/)[0]}  ·  type / for the list`));
+      return "cont";
+    }
+    let body: string;
+    try {
+      body = readSkillBody(hit.skill);
+    } catch (e) {
+      say(red(`error: /${hit.skill.name}: ${e instanceof Error ? e.message : String(e)}`));
+      return "cont";
+    }
+    await chat({ role: "skill", name: hit.skill.name, path: hit.skill.path, body, args: hit.args }, messages, ctx, say, signal);
     return "cont";
   }
   if (!line) return "cont";
+  await chat({ role: "user", content: line }, messages, ctx, say, signal);
+  return "cont";
+}
+
+// 一轮对话：发请求前自动压 → 写入这句 → agentTurn → 超限兜底 → 失败撤回
+// 普通输入和 /名字 调用共用
+async function chat(msg: Message, messages: Message[], ctx: AgentContext, say: Say, signal?: AbortSignal): Promise<void> {
   // 先压再写入这句。先 push 的话这句会落在分隔之前，恢复时读不到
   if (shouldAutoCompact(messages, getProvider().contextWindow)) {
     const r = await runCompact(messages, signal);
     if (!r.ok) {
-      if (r.aborted) return "cont";
+      if (r.aborted) return;
       say(dim(`compact skipped: ${r.error}`));
     } else {
       addCarry(r.carried);
       say(dim(compactLine(r.before, r.after, true)));
     }
   }
-  pushMessage(messages, { role: "user", content: line });
+  pushMessage(messages, msg);
   const before = tokenTotals(messages);
-  const tailIsTurn = () => {
-    const last = messages[messages.length - 1];
-    return last?.role === "user" && last.content === line;
-  };
+  // 比对象，不比内容。压缩保留段里还是同一个对象
+  const tailIsTurn = () => messages[messages.length - 1] === msg;
   try {
     await agentTurn(messages, { ...ctx, signal });
     const after = tokenTotals(messages);
@@ -473,13 +540,12 @@ async function dispatch(
   }
   const lost = takePersistError();
   if (lost) say(dim(`session not saved: ${lost}`));
-  return "cont";
 }
 
 // 读一行再执行
-export async function repl(messages: Message[], ctx: AgentContext, tui?: Tui): Promise<void> {
+export async function repl(messages: Message[], ctx: AgentContext, skills: SkillSet, tui?: Tui): Promise<void> {
   if (tui) {
-    tui.setCommands(COMMANDS);
+    tui.setCommands([...COMMANDS, ...skillCommands(skills)]);
     // /model、/provider 换成二级选项，避免再 pause 出屏顶选择框
     tui.setLookup((input) => {
       if (input === "/model" || input.startsWith("/model ")) {
@@ -497,12 +563,12 @@ export async function repl(messages: Message[], ctx: AgentContext, tui?: Tui): P
       const raw = await tui.readLine();
       if (raw === null) break;
       const line = raw.trim();
-      // 斜杠命令不 busy，避免 /model 时 footer 还写着 esc interrupt
-      const chatting = !!line && (!line.startsWith("/") || line === "/compact");
+      // 内置命令不 busy，避免 /model 时 footer 还写着 esc interrupt。/compact 和 skill 要发请求，要能打断
+      const chatting = !!line && (!line.startsWith("/") || line === "/compact" || !!skillOf(line, skills));
       abort = new AbortController();
       if (chatting) tui.setBusy(true);
       try {
-        const r = await dispatch(line, messages, ctx, (s) => tui.writeln(s), tui, abort.signal);
+        const r = await dispatch(line, messages, ctx, (s) => tui.writeln(s), skills, tui, abort.signal);
         if (r === "exit") break;
       } finally {
         tui.setBusy(false);
@@ -523,7 +589,7 @@ export async function repl(messages: Message[], ctx: AgentContext, tui?: Tui): P
   // 以 \ 结尾的行不提交，和下一行拼起来。stdin 关掉时缓冲里剩下的也要发出去
   let pending = "";
   const take = async (text: string): Promise<boolean> => {
-    const r = await dispatch(text, messages, ctx, (s) => console.log(s));
+    const r = await dispatch(text, messages, ctx, (s) => console.log(s), skills);
     return r === "exit";
   };
   // 管道里 stdin 先 close 时，for-await 可能还在吐缓冲行；关掉后不再 prompt

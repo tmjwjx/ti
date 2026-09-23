@@ -1,5 +1,15 @@
 // 按协议转到对应厂家。内部消息先翻成协议认得的三种，再分发
-import type { AssistantMessage, LlmMessage, Message, ProviderConf, SummaryMessage, TextContent, UserMessage } from "../types.ts";
+import { dirname } from "node:path";
+import type {
+  AssistantMessage,
+  LlmMessage,
+  Message,
+  ProviderConf,
+  SkillMessage,
+  SummaryMessage,
+  TextContent,
+  UserMessage,
+} from "../types.ts";
 import { callAnthropic } from "./anthropic.ts";
 import { callOpenAI } from "./openai.ts";
 
@@ -39,6 +49,12 @@ function summaryToUser(m: SummaryMessage): UserMessage {
   return { role: "user", content: SUMMARY_PREFIX + m.text + fileTags(m.files) + SUMMARY_SUFFIX };
 }
 
+// 照 pi 的 /skill 展开：全文包在 <skill> 里，参数另起一段
+function skillToUser(m: SkillMessage): UserMessage {
+  const block = `<skill name="${m.name}" location="${m.path}">\nReferences are relative to ${dirname(m.path)}.\n\n${m.body}\n</skill>`;
+  return { role: "user", content: m.args ? `${block}\n\n${m.args}` : block };
+}
+
 function asBlocks(content: string | TextContent[]): TextContent[] {
   return typeof content === "string" ? [{ type: "text", text: content }] : content;
 }
@@ -51,12 +67,12 @@ function mergeUser(a: UserMessage, b: UserMessage): UserMessage {
   return { role: "user", content: [...asBlocks(a.content), ...asBlocks(b.content)] };
 }
 
-// 内部消息翻成协议认得的三种。aborted 整条丢掉，summary 变成带前后缀的 user
+// 内部消息翻成协议认得的三种。aborted 整条丢掉，summary、skill 变成 user
 export function toLlm(messages: Message[]): LlmMessage[] {
   const out: LlmMessage[] = [];
   for (const m of messages) {
     if (m.role === "assistant" && m.stopReason === "aborted") continue;
-    const next: LlmMessage = m.role === "summary" ? summaryToUser(m) : m;
+    const next: LlmMessage = m.role === "summary" ? summaryToUser(m) : m.role === "skill" ? skillToUser(m) : m;
     const prev = out[out.length - 1];
     if (next.role === "user" && prev?.role === "user") {
       out[out.length - 1] = mergeUser(prev, next);
