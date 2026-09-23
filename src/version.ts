@@ -13,4 +13,7 @@ function devVersion(): string {
   }
 }
 
+// 发布产物里构建会写死包号，开发直跑 src 时没有这个注入
+export const isBundled: boolean = typeof __TI_VERSION__ === "string";
+
 export const VERSION: string = typeof __TI_VERSION__ === "string" ? __TI_VERSION__ : devVersion();

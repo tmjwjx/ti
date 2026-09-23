@@ -51,6 +51,7 @@ src/
     keys.ts          按键名、CSI/SS3 拼键
     form.ts          全屏 select/input（非 TUI 兜底）
     setup.ts         配置向导
+    update.ts        ti update：按安装器把全局命令更新到官方源查到的版本
   core/
     agent.ts         agentTurn
     session.ts       当前目录 jsonl、pushMessage、list / resume / rename

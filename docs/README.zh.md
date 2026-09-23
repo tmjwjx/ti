@@ -10,14 +10,14 @@
 npm i -g @tmjwjx/ti
 ```
 
-需要 Node ≥ 22.18。
+需要 Node ≥ 22.18。已经装过的用 `ti update` 更新。
 
 ## 首次运行
 
 在要干活的项目目录里运行 `ti`。第一次会弹出配置向导，选厂家、模型，填 API key。之后要改就运行 `ti setup`。
 
 ```
-ti [setup] [--provider name] [-m model] [--resume] [--version]
+ti [setup | update] [--provider name] [-m model] [--resume] [--version]
 ```
 
 ## 命令

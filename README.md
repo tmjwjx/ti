@@ -10,14 +10,14 @@ A coding agent for the terminal. It reads files, edits code, and runs commands.
 npm i -g @tmjwjx/ti
 ```
 
-Requires Node ≥ 22.18.
+Requires Node ≥ 22.18. Update an existing install with `ti update`.
 
 ## First run
 
 Start `ti` in the project directory you want to work on. The first run opens a setup picker for provider, model, and API key. Run `ti setup` to change it later.
 
 ```
-ti [setup] [--provider name] [-m model] [--resume] [--version]
+ti [setup | update] [--provider name] [-m model] [--resume] [--version]
 ```
 
 ## Commands

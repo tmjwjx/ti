@@ -365,6 +365,8 @@ TUI 下 `/help` 在命令列表后面加一段常用快捷键（send、newline�
 
 **0.0.8 补上的**（实现文档另开一页：`docs/impl/packaging.md`）：英文 `README.md` + 中文 `docs/README.zh.md`（放在根目录会被 npm 强制打进包），只写安装和用法；`ti --version`（构建时 `define` 写入版本号，开发时读 `package.json`）；`package.json` 补 `repository` / `homepage` / `bugs` / `keywords` / `author`；`scripts/pack-check.mjs` 构建、打包、装到临时目录、跑 `--version` 与 `--help`、查白名单和体积。类型检查用 devDependency `typescript`，不进包。不做 CI。
 
+**0.0.9**：`ti update`（`src/cli/update.ts`，说明在 `docs/impl/update.md`）。只更新已安装的全局命令。最新号问官方源，装查到的那个版本。按安装路径选 npm、pnpm、yarn 或 bun。不是全局安装或目录不可写就拒绝，并打出要手敲的命令。`npm start` 直跑源码时拒绝。
+
 ## 5. 测试（已开发 · 0.0.7，待 CR）
 
 #### 框架与入口

@@ -10,13 +10,15 @@ import { openTui } from "./cli/tui.ts";
 import type { Tui } from "./cli/tui.ts";
 import { FormAbort } from "./cli/form.ts";
 import { runSetup } from "./cli/setup.ts";
+import { runUpdate } from "./cli/update.ts";
 import { VERSION } from "./version.ts";
 
 // 打印用法并退出
 function help(code: number): never {
   console.log(`ti ${VERSION}
-usage: ti [setup] [--provider name] [-m model] [--resume]
+usage: ti [setup | update] [--provider name] [-m model] [--resume]
   setup            configure provider, model, and API key
+  update           install the latest version
   -m, --model      model name
       --provider   deepseek | kimi | glm | custom names from settings.json
       --resume     pick a session from this directory
@@ -61,6 +63,10 @@ async function main() {
   let cliModel: string | undefined;
   let resume = false;
   const args = process.argv.slice(2);
+  if (args.includes("update")) {
+    if (args.length !== 1) help(1);
+    await runUpdate();
+  }
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "setup") forceSetup = true;
