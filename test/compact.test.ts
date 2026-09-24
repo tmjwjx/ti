@@ -1,6 +1,7 @@
 // core/compact.ts：估算、阈值、切点、用量可信标记，以及经假 fetch 跑完整的 runCompact
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { AssistantMessage, Message, ToolCall } from "../src/types.ts";
 import { fakeFetch, fakeProvider, isolate, openaiStream, type FakeFetch } from "./helpers.ts";
 
@@ -358,6 +359,37 @@ describe("runCompact", () => {
     const r = await runCompact(msgs);
     assert.equal(r.ok, true);
     assert.deepEqual(session.loadMessages(file), msgs);
+    session.endSession();
+  });
+
+  test("落盘写到一半失败：返回错误，内存与文件都保持原样", async () => {
+    net = fakeFetch([summaryReply()]);
+    const msgs: Message[] = [];
+    for (const m of history()) session.pushMessage(msgs, m);
+    const file = session.sessionFile()!;
+    const beforeFile = readFileSync(file);
+    const beforeMsgs = structuredClone(msgs);
+    const real = session.openSession(file);
+    // 分隔先落盘，后面的消息行失败
+    session.bindSession({
+      file,
+      name: session.sessionName() ?? "",
+      append(entry) {
+        if ((entry as { type?: string }).type === "message") throw new Error("summary write failed");
+        real.append(entry);
+      },
+      markCompact() {
+        real.markCompact();
+      },
+      dropLast() {
+        real.dropLast();
+      },
+    });
+    const r = await runCompact(msgs);
+    assert.deepEqual(r, { ok: false, aborted: false, empty: false, error: "summary write failed" });
+    assert.deepEqual(msgs, beforeMsgs);
+    assert.deepEqual(readFileSync(file), beforeFile);
+    assert.equal(readFileSync(file, "utf8").includes('"type":"compact"'), false);
     session.endSession();
   });
 });

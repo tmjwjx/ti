@@ -16,8 +16,8 @@
    - 失败：打印原因，退出码 1，不安装。
    - 官方源不比本地新：打印 `<当前版本> is up to date`，退出码 0。本地更新也不降级。
 4. 官方源更新时，先看这次安装能不能自己改：
-   - 用正在运行的文件的真实路径判断安装器。路径里有 `.pnpm` 或 `/pnpm/` 是 pnpm，有 `.yarn` 或 `/yarn/` 是 yarn，是 bun 运行时或 bun 的全局目录是 bun，其余落在 `node_modules` 里是 npm。对不上就是 unknown。
-   - 安装目录必须落在该安装器的全局根下面：`npm root -g`、`pnpm root -g`、`yarn global dir`、bun 的全局 `node_modules`。npm 若能从路径看出 `<prefix>/lib/node_modules/@tmjwjx/ti`，全局根用这个 prefix（Windows 不推断 prefix）。
+   - 从正在运行的文件往上找包目录。Node 已经把入口快捷方式换成真实文件，不看用户敲进去的那个路径。路径里有 `.pnpm` 或 `/pnpm/` 是 pnpm，有 `.yarn` 或 `/yarn/` 是 yarn，是 bun 运行时或 bun 的全局目录是 bun，其余落在 `node_modules` 里是 npm。对不上就是 unknown，这时不印安装命令。
+   - 安装目录必须落在该安装器的全局根下面：`npm root -g`、`pnpm root -g`、`yarn global dir`、bun 的全局 `node_modules`。比的时候安装目录和全局根都按原路径、真实路径各比一次。npm 若能从路径看出 `<prefix>/lib/node_modules/@tmjwjx/ti`，全局根用这个 prefix（Windows 不推断 prefix）。
    - 安装目录和它的上一级都要可写。
    - 任一不满足：打印 `error: ti cannot update this installation`，下一行打出应当手敲的安装命令，退出码 1。不真正执行。
 5. 能改：打印 `updating <当前> → <最新>`，再执行下面之一。输出原样给用户，退出码跟安装器。安装器不在 PATH 上：打印 `error: <命令> not found` 和同一条命令，退出码 1。

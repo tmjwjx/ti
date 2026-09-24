@@ -1,7 +1,11 @@
 // ti update：版本比较、认安装器、能不能自己装
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareVersions, decideInstall, detectInstaller, inferNpmPrefix, updatePlan } from "../src/cli/update.ts";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { compareVersions, decideInstall, detectInstaller, inferNpmPrefix, isInsideGlobalRoot, packageDirFrom, runningPackageDir, updatePlan } from "../src/cli/update.ts";
 
 const NPM_DIR = "/opt/homebrew/lib/node_modules/@tmjwjx/ti";
 
@@ -48,6 +52,45 @@ test("不在全局目录或不可写时不装，但给出手敲的命令", () =>
 
   const locked = decideInstall(NPM_DIR, ["/opt/homebrew/lib/node_modules"], false, "0.0.9");
   assert.equal(locked.ok, false);
+});
+
+test("从正在运行的文件往上找包，不从快捷方式所在目录找", () => {
+  const root = mkdtempSync(join(tmpdir(), "ti-update-"));
+  const pkg = join(root, "lib/node_modules/@tmjwjx/ti");
+  mkdirSync(join(pkg, "bin"), { recursive: true });
+  writeFileSync(join(pkg, "package.json"), "{}\n");
+  writeFileSync(join(pkg, "bin/ti.js"), "");
+  mkdirSync(join(root, "bin"));
+  symlinkSync("../lib/node_modules/@tmjwjx/ti/bin/ti.js", join(root, "bin/ti"));
+  try {
+    const found = packageDirFrom(join(pkg, "bin"));
+    assert.equal(found && realpathSync(found), realpathSync(pkg));
+    const fromShortcut = packageDirFrom(join(root, "bin"));
+    assert.notEqual(fromShortcut && realpathSync(fromShortcut), realpathSync(pkg));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("全局根是快捷方式时也算在里面", () => {
+  const root = mkdtempSync(join(tmpdir(), "ti-update-"));
+  const modules = join(root, "real/lib/node_modules");
+  const pkg = join(modules, "@tmjwjx/ti");
+  mkdirSync(pkg, { recursive: true });
+  const link = join(root, "link-modules");
+  symlinkSync(modules, link);
+  try {
+    assert.equal(isInsideGlobalRoot(pkg, [link]), true);
+    assert.equal(isInsideGlobalRoot(join(link, "@tmjwjx/ti"), [modules]), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("正在运行的文件往上就是本包", () => {
+  const repo = dirname(dirname(fileURLToPath(import.meta.url)));
+  const found = runningPackageDir();
+  assert.equal(found && realpathSync(found), realpathSync(repo));
 });
 
 test("认不出安装器时不给命令", () => {

@@ -29,11 +29,32 @@ describe("settings 文件", () => {
     assert.deepEqual(settingsAtImport, { provider: "deepseek", providers: { deepseek: { apiKey: "boot-key" } } });
   });
 
-  test("文件不存在或 JSON 坏了当空对象", () => {
+  test("文件不存在当空配置", () => {
     rmSync(settingsFile);
     assert.deepEqual(loadSettings(), {});
-    useSettings("{ not json");
+    reloadSettings();
     assert.deepEqual(config.settings, {});
+  });
+
+  test("JSON 坏了时保存不覆盖原文件", () => {
+    const raw = "{ not json\n";
+    writeFileSync(settingsFile, raw);
+    reloadSettings();
+    writeProvider("glm", { apiKey: "should-not-land" });
+    assert.equal(readFileSync(settingsFile, "utf8"), raw);
+  });
+
+  test("文件读不了时保存不覆盖原文件", { skip: process.getuid?.() === 0 }, () => {
+    const raw = "{\"provider\":\"kimi\"}\n";
+    writeFileSync(settingsFile, raw);
+    chmodSync(settingsFile, 0);
+    try {
+      reloadSettings();
+    } finally {
+      chmodSync(settingsFile, 0o600);
+    }
+    writeProvider("glm", { apiKey: "should-not-land" });
+    assert.equal(readFileSync(settingsFile, "utf8"), raw);
   });
 
   test("writeProvider 浅合并、设为当前并落盘，目录 0700 文件 0600", () => {

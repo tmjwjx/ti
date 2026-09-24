@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PaletteLookup, SlashCommand, Tui } from "../src/cli/tui.ts";
 import type { Message } from "../src/types.ts";
-import { fakeFetch, isolate, openaiStream, plain, recordUI, type FakeFetch, type FakeReply } from "./helpers.ts";
+import { anthropicStream, fakeFetch, fakeProvider, isolate, openaiStream, plain, recordUI, type FakeFetch, type FakeReply } from "./helpers.ts";
 
 const box = isolate();
 const settingsFile = join(box.home, ".ti", "settings.json");
@@ -293,6 +293,20 @@ describe("对话", () => {
     assert.deepEqual(r.messages, []);
     assert.ok(r.said.includes("error: API error 500: server down"));
     assert.deepEqual(session.loadMessages(session.sessionFile()!), []);
+  });
+
+  test("流中途抛错：半截助手和用户这句都留下", async () => {
+    config.setProvider(fakeProvider("anthropic"));
+    const frames = anthropicStream({ text: ["半截回复"] });
+    frames.pop();
+    frames.push(`data: ${JSON.stringify({ type: "error", error: { message: "Overloaded" } })}\n\n`);
+    const r = await run(["keep me"], { replies: [{ frames }] });
+    assert.deepEqual(r.messages.map((m) => m.role), ["user", "assistant"]);
+    assert.equal((r.messages[0] as any).content, "keep me");
+    assert.equal((r.messages[1] as any).stopReason, "incomplete");
+    assert.deepEqual((r.messages[1] as any).content, [{ type: "text", text: "半截回复" }]);
+    assert.ok(r.said.includes("error: API stream error: Overloaded"));
+    assert.deepEqual(session.loadMessages(session.sessionFile()!), r.messages);
   });
 
   test("会话落盘：对话后文件里能读回同样的消息", async () => {

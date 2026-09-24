@@ -46,11 +46,28 @@ export const CATALOG: Record<string, CatalogEntry> = {
   },
 };
 
-// 读 settings
+// 文件在但读不了或解析不了时记下原因。有这个标记就不要保存
+let settingsError: string | undefined;
+
+// 读 settings。只有文件不存在才当成空配置
 export function loadSettings(): any {
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(SETTINGS_PATH, "utf8"));
-  } catch {
+    raw = readFileSync(SETTINGS_PATH, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      settingsError = undefined;
+      return {};
+    }
+    settingsError = e instanceof Error ? e.message : String(e);
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    settingsError = undefined;
+    return parsed;
+  } catch (e) {
+    settingsError = e instanceof Error ? e.message : String(e);
     return {};
   }
 }
@@ -66,8 +83,9 @@ function chmodQuiet(path: string, mode: number): void {
   }
 }
 
-// 整份 settings 落盘
+// 整份 settings 落盘。上次读失败时不写，避免用空内容盖掉原文件
 export function saveSettings(): void {
+  if (settingsError) return;
   const dir = dirname(SETTINGS_PATH);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });

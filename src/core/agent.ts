@@ -102,13 +102,27 @@ export async function agentTurn(messages: Message[], ctx: AgentContext): Promise
       return;
     }
     let msg;
+    // 流自己出错时，屏幕上已经打出的字收在这里
+    let streamed = "";
     try {
-      msg = await callLLM(getProvider(), ctx.systemPrompt, messages, TOOLS, ui.text, signal);
+      msg = await callLLM(getProvider(), ctx.systemPrompt, messages, TOOLS, (delta) => {
+        streamed += delta;
+        ui.text(delta);
+      }, signal);
     } catch (e) {
-      // 零字节 abort：不 throw，由收尾写入说明。API 失败继续往外抛给 REPL
+      // 零字节 abort：不 throw，由收尾写入说明。用户打断不进下面的分支
       if (isAbortError(e)) {
         finishInterrupted(messages, ui);
         return;
+      }
+      // 流自己出错：已打出的字存成没说完的回复再抛出，正文还在，不当成被打断的一次尝试
+      if (streamed) {
+        pushMessage(messages, {
+          role: "assistant",
+          content: [{ type: "text", text: streamed }],
+          stopReason: "incomplete",
+          usage: { input: 0, output: 0 },
+        });
       }
       throw e;
     }

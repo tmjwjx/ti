@@ -533,7 +533,7 @@ async function chat(msg: Message, messages: Message[], ctx: AgentContext, say: S
         }
       }
     } else {
-      // 末尾仍是这句 user 才撤。压缩之后用长度判断会指错
+      // 末尾仍是这句才撤。半截助手已经写下时不撤；压缩之后用长度判断会指错
       if (tailIsTurn()) popMessage(messages);
       say(red(`error: ${e instanceof Error ? e.message : String(e)}`));
     }

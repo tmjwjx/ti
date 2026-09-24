@@ -39,6 +39,7 @@
 | 0.0.7 | 测试（顺带修测试查出的 bash 打断不杀子进程、SSE 不认 CRLF） | 已提交，未发 npm |
 | 0.0.8 | 打包余项：英文 README + 中文版、`ti --version`、`package.json` 元信息、打包检查脚本 | 已发 npm |
 | 0.0.9 | `ti update`：把已安装的命令更新到官方源最新版 | 已发 npm |
+| 0.0.10 | 可靠性：更新认包、压缩超限、落盘撤回、bash 标准输入、write 类型、流出错留字、settings 读坏不覆盖 | 已提交，未发 npm |
 | 1.0.0 | 初版：上表待发齐了 | 未到 |
 
 权限确认明确不做。TUI 里那些加分项（真追加滚动、中途插入、括号粘贴等）不单独占号。初版之后的候选（扩展、金额、`/init` 等）见 PRD §4.3。
@@ -47,4 +48,4 @@
 
 0.0.3（session）已发 npm，落盘可靠性收口也已提交，没另开号。
 
-0.0.4（`/compact`）已提交，发不发 npm 另说。实现在 `src/core/compact.ts`，说明在 `docs/impl/compact.md`。`glm-5.3-flash` 仍没有窗口值，不自动压。0.0.5（输入体验）已提交，发不发 npm 另说。实现在 `src/cli/tui.ts`、`src/cli/repl.ts`、`src/llm/index.ts` 的 `toLlm`、`src/core/compact.ts`，说明在 `docs/impl/history.md`。0.0.6（skills）已提交，发不发 npm 另说。实现在 `src/core/skills.ts`，说明在 `docs/impl/skills.md`。还没有正式版、没有存量文件，会话格式直接改，不做旧格式兼容。自动往用户项目 `.gitignore` 加 `.ti/` 的逻辑已删掉。0.0.7（测试）已提交，发不发 npm 另说。测试在 `test/*.test.ts`，`npm test` 跑，说明在 `docs/DESIGN.md` §5。顺带修了测试查出的两处：bash 打断或超时不杀子进程、SSE 不认 CRLF。0.0.8（打包余项）已发 npm。说明在 `docs/impl/packaging.md`。0.0.9（`ti update`）已发 npm。说明在 `docs/impl/update.md`。
+0.0.4（`/compact`）已提交，发不发 npm 另说。实现在 `src/core/compact.ts`，说明在 `docs/impl/compact.md`。`glm-5.3-flash` 仍没有窗口值，不自动压。0.0.5（输入体验）已提交，发不发 npm 另说。实现在 `src/cli/tui.ts`、`src/cli/repl.ts`、`src/llm/index.ts` 的 `toLlm`、`src/core/compact.ts`，说明在 `docs/impl/history.md`。0.0.6（skills）已提交，发不发 npm 另说。实现在 `src/core/skills.ts`，说明在 `docs/impl/skills.md`。还没有正式版、没有存量文件，会话格式直接改，不做旧格式兼容。自动往用户项目 `.gitignore` 加 `.ti/` 的逻辑已删掉。0.0.7（测试）已提交，发不发 npm 另说。测试在 `test/*.test.ts`，`npm test` 跑，说明在 `docs/DESIGN.md` §5。顺带修了测试查出的两处：bash 打断或超时不杀子进程、SSE 不认 CRLF。0.0.8（打包余项）已发 npm。说明在 `docs/impl/packaging.md`。0.0.9（`ti update`）已发 npm。说明在 `docs/impl/update.md`。0.0.10（可靠性）已提交，未发 npm。`ti update` 从正在运行的文件往上找包，全局根按原路径和真实路径各比一次。压缩写入超过 32MB 先拒绝，写失败把文件截回原长度。追加失败后的撤回不再砍掉上一条已落盘消息。bash 的标准输入设为忽略。write 的 content 不是字符串就失败，空字符串仍可写。流自己出错时，已显示的字存成没说完的助手回复，用户那句不撤。settings 只有文件不存在才当空配置，读坏或解析失败则这次不保存。

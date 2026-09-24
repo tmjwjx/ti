@@ -1,8 +1,9 @@
 // ti update：把已安装的全局命令更新到官方源上查到的那个版本
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync } from "node:fs";
+import { accessSync, constants, existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isBundled, VERSION } from "../version.ts";
 
 const REGISTRY = "https://registry.npmjs.org";
@@ -83,13 +84,30 @@ export function installCommand(installer: Installer, version: string, prefix?: s
   }
 }
 
+// 一条路径的原样和真实路径。比全局根时两边都要算上，快捷方式才对得上
+function pathCandidates(p: string): string[] {
+  const resolved = resolve(p);
+  const found = [resolved];
+  if (existsSync(resolved)) {
+    try {
+      const real = realpathSync(resolved);
+      if (real !== resolved) found.push(real);
+    } catch {
+      // 换不成真实路径就只用原路径
+    }
+  }
+  return process.platform === "win32" ? found.map((x) => x.toLowerCase()) : found;
+}
+
+function sameOrInside(root: string, dir: string): boolean {
+  const rel = relative(root, dir);
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
 // 安装目录是不是落在给出的全局根下面
 export function isInsideGlobalRoot(packageDir: string, roots: string[]): boolean {
-  const dir = resolve(packageDir);
-  return roots.some((root) => {
-    const rel = relative(resolve(root), dir);
-    return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
-  });
+  const dirs = pathCandidates(packageDir);
+  return roots.some((root) => pathCandidates(root).some((base) => dirs.some((dir) => sameOrInside(base, dir))));
 }
 
 // 决定能不能自己装。不能装但认得出安装器时，给出手敲的命令
@@ -113,14 +131,19 @@ async function fetchLatest(): Promise<string> {
   return body.version;
 }
 
-// 从正在运行的文件往上找到所在的包目录
-function packageDirOf(entry: string): string | undefined {
-  let dir = dirname(resolve(entry));
+// 从某个目录往上找到 package.json 所在的包
+export function packageDirFrom(start: string): string | undefined {
+  let dir = resolve(start);
   while (dir !== dirname(dir)) {
     if (existsSync(join(dir, "package.json"))) return dir;
     dir = dirname(dir);
   }
   return undefined;
+}
+
+// 正在运行的文件所在的包。Node 已经把入口快捷方式换成真实文件，不看用户敲进去的路径
+export function runningPackageDir(): string | undefined {
+  return packageDirFrom(dirname(fileURLToPath(import.meta.url)));
 }
 
 // 安装目录和它的上一级是否可写
@@ -203,7 +226,7 @@ export async function runUpdate(): Promise<never> {
     console.log(`${VERSION} is up to date`);
     process.exit(0);
   }
-  const dir = process.argv[1] ? packageDirOf(process.argv[1]) : undefined;
+  const dir = runningPackageDir();
   const installer = dir ? detectInstaller(dir) : undefined;
   const prefix = installer === "npm" && dir ? inferNpmPrefix(dir) : undefined;
   const decision = decideInstall(dir, dir && installer ? globalRoots(installer, prefix) : [], dir ? writableInstall(dir) : false, latest);

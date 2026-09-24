@@ -62,6 +62,8 @@ export type SessionWriter = {
 let writer: SessionWriter | null = null;
 let persistError: string | undefined;
 let exitHooked = false;
+// 自本次接上文件以来，每次 pushMessage 有没有写成一行
+let appended: boolean[] = [];
 
 // 记下最近一次落盘失败，给界面取走提示
 function notePersist(e: unknown): void {
@@ -681,12 +683,14 @@ export function bindSession(w: SessionWriter): void {
   acquireLock(w.file);
   if (writer) releaseLock(writer.file);
   writer = w;
+  appended = [];
 }
 
 // 断开当前文件，磁盘上那份不动。下一句用户输入会再走 createSession
 export function endSession(): void {
   if (writer) releaseLock(writer.file);
   writer = null;
+  appended = [];
 }
 
 // 读出可回放的对话。meta 与 compact 不当消息；形状对不上的补或丢
@@ -811,31 +815,75 @@ export function listSessions(limit = 10): SessionInfo[] {
   return items;
 }
 
-// 压缩落盘：分隔、摘要、再把保留段追加一遍。没有 writer 就不写，避免为摘要新建文件
+// 压缩落盘：分隔、摘要、再把保留段追加一遍。写失败时文件保持原样，没有 writer 就不写
 export function commitCompact(summary: SummaryMessage, kept: Message[]): void {
-  if (!writer) return;
-  writer.markCompact();
-  writer.append({ type: "message", ...summary });
-  for (const m of kept) writer.append({ type: "message", ...m });
+  const current = writer;
+  if (!current) return;
+  const file = current.file;
+  // 分隔只造一次，预检和写入共用这一行
+  const compact = { type: "compact", createdAt: new Date().toISOString() };
+  const entries = [compact, { type: "message", ...summary }, ...kept.map((m) => ({ type: "message", ...m }))];
+  let size = 0;
+  try {
+    size = statSync(file).size;
+  } catch {
+    size = 0;
+  }
+  let incoming = 0;
+  for (const entry of entries) incoming += Buffer.byteLength(JSON.stringify(entry) + "\n");
+  // 末尾不是换行时追加会先补一个 \n，预检把这个字节算进去
+  if (size > 0) {
+    const fd = openSync(file, "r");
+    try {
+      const last = Buffer.alloc(1);
+      readSync(fd, last, 0, 1, size - 1);
+      if (last[0] !== 0x0a) incoming += 1;
+    } finally {
+      closeSync(fd);
+    }
+  }
+  if (size + incoming > MAX_BYTES) throw new Error(`session file exceeds ${MAX_BYTES} bytes`);
+  try {
+    for (const entry of entries) current.append(entry);
+  } catch (e) {
+    // 半截分隔不能留在文件里，否则下次打开会丢掉前面的原文
+    try {
+      const fd = openSync(file, "r+");
+      try {
+        ftruncateSync(fd, size);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      // 截回失败仍抛出原来的写入错误
+    }
+    throw e;
+  }
 }
 
 // 对话状态的唯一入口：先推进内存，再追加一行
 // writer 为空才建档，所以只敲斜杠命令就退出不会留空文件
 export function pushMessage(messages: Message[], msg: Message): void {
   messages.push(msg);
+  let wrote = false;
   try {
     if (!writer) {
       writer = createSession(firstLine(inputText(msg)) || undefined);
     }
     writer.append({ type: "message", ...msg });
+    wrote = true;
   } catch (e) {
+    // 字节没写进去。撤回时只从内存拿掉，不能按文件末尾去截上一条
     notePersist(e);
   }
+  appended.push(wrote);
 }
 
-// 撤回最后一条，数组与文件一起退。给「刚写下 user、请求还没写出 assistant 就失败」用
+// 撤回最后一条。没写进文件的只从内存拿掉，写过的才把文件末尾截掉
 export function popMessage(messages: Message[]): void {
   messages.pop();
+  if (!appended.pop()) return;
   try {
     writer?.dropLast();
   } catch (e) {

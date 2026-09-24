@@ -1,7 +1,7 @@
 // tools：read、write、edit、bash 在临时目录里的行为，以及输出截断
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolate } from "./helpers.ts";
 
@@ -88,6 +88,14 @@ describe("write", () => {
 
   test("空内容也写", async () => {
     assert.equal(await runTool("write", { path: "zero.txt", content: "" }), "wrote 0 bytes to zero.txt");
+    assert.equal(readFileSync(join(box.project, "zero.txt"), "utf8"), "");
+  });
+
+  test("缺 content 不写文件并失败", async () => {
+    await assert.rejects(runTool("write", { path: "missing-content.txt" }), { message: "content must be a string" });
+    assert.equal(existsSync(join(box.project, "missing-content.txt")), false);
+    await assert.rejects(runTool("write", { path: "bad-content.txt", content: 1 }), { message: "content must be a string" });
+    assert.equal(existsSync(join(box.project, "bad-content.txt")), false);
   });
 });
 
@@ -214,6 +222,15 @@ describe("bash", () => {
   test("没有输出时写 (no output)", async () => {
     assert.equal(await runTool("bash", { command: "true" }), "(no output)");
     assert.equal(await runTool("bash", { command: "exit 2" }), "(no output)\n[exit code 2]");
+  });
+
+  // 超时只防回归成一直等；stdin 已忽略时 cat 会马上读到结束
+  test("读标准输入的命令马上结束", { timeout: 5_000 }, async () => {
+    assert.equal(await runTool("bash", { command: "cat" }), "(no output)");
+  });
+
+  test("管道里的输入照旧送到命令", async () => {
+    assert.equal(await runTool("bash", { command: "printf x | cat" }), "x");
   });
 
   // 下面几条的 sleep 远长于测试超时：没被杀就不会自然结束，靠结果里的标记断言，超时只防卡死

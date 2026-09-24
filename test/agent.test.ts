@@ -190,6 +190,24 @@ describe("流失败", () => {
     assert.deepEqual(messages.map((m) => m.role), ["user", "assistant"]);
     assert.equal(rec.events.at(-1)!.kind, "error");
   });
+
+  test("流中途抛错：已打出的字存成没说完的回复，用户这句还在", async () => {
+    setProvider(fakeProvider("anthropic"));
+    const frames = anthropicStream({ text: ["半截回复"] });
+    frames.pop();
+    frames.push(`data: ${JSON.stringify({ type: "error", error: { message: "Overloaded" } })}\n\n`);
+    net = fakeFetch([{ frames }]);
+    const rec = recordUI();
+    const messages: Message[] = [];
+    session.pushMessage(messages, { role: "user", content: "问" });
+    await assert.rejects(agentTurn(messages, { systemPrompt: "S", ui: rec.ui }), { message: "API stream error: Overloaded" });
+    assert.equal(rec.text(), "半截回复");
+    assert.deepEqual(messages.map((m) => m.role), ["user", "assistant"]);
+    assert.equal((messages[1] as any).stopReason, "incomplete");
+    assert.deepEqual((messages[1] as any).content, [{ type: "text", text: "半截回复" }]);
+    // 没说完的正文要能再发给模型，不能整条当成被打断的尝试丢掉
+    assert.equal(toLlm(messages).at(-1)?.role, "assistant");
+  });
 });
 
 describe("length 截断", () => {

@@ -4,9 +4,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   rmSync,
   statSync,
@@ -14,7 +18,6 @@ import {
   truncateSync,
   utimesSync,
   writeFileSync,
-  chmodSync,
 } from "node:fs";
 import { basename, join } from "node:path";
 import type { Message } from "../src/types.ts";
@@ -25,6 +28,7 @@ const { setProvider } = await import("../src/config/index.ts");
 const s = await import("../src/core/session.ts");
 
 const dir = join(box.project, ".ti", "sessions");
+const SESSION_MAX = 32 * 1024 * 1024;
 
 // 读出 jsonl 的每一行（不含末尾空行）
 function lines(file: string): string[] {
@@ -52,6 +56,27 @@ function meta(extra: object = {}): object {
 // 一行 message
 function msg(m: object): object {
   return { type: "message", ...m };
+}
+
+// 按字节读一段。大文件只核对头尾，避免断言把整份打出来
+function readSlice(file: string, length: number, position: number): Buffer {
+  const fd = openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(length);
+    const n = readSync(fd, buf, 0, length, position);
+    assert.equal(n, length);
+    return buf;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// 这次压缩要追加的字节数。时间戳长度固定，用来把文件填到刚好超限
+function plannedBytes(summary: { role: "summary"; text: string; files: { read: string[]; modified: string[] } }, kept: Message[]): number {
+  let n = Buffer.byteLength(JSON.stringify({ type: "compact", createdAt: new Date().toISOString() }) + "\n");
+  n += Buffer.byteLength(JSON.stringify({ type: "message", ...summary }) + "\n");
+  for (const m of kept) n += Buffer.byteLength(JSON.stringify({ type: "message", ...m }) + "\n");
+  return n;
 }
 
 // 已经退出的进程号，用来模拟死锁
@@ -218,6 +243,30 @@ describe("popMessage", () => {
     assert.equal(readFileSync(file, "utf8"), before);
   });
 
+  test("追加失败后撤回不截文件，上一条还在", { skip: process.getuid?.() === 0 }, () => {
+    const messages: Message[] = [];
+    s.pushMessage(messages, { role: "user", content: "keep" });
+    const file = s.sessionFile()!;
+    const before = readFileSync(file, "utf8");
+    chmodSync(file, 0o400);
+    try {
+      s.pushMessage(messages, { role: "user", content: "lost" });
+    } finally {
+      chmodSync(file, 0o600);
+    }
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.equal(messages.length, 2);
+    s.popMessage(messages);
+    assert.deepEqual(messages, [{ role: "user", content: "keep" }]);
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.deepEqual(s.loadMessages(file), messages);
+    // 失败那条没落盘，后面成功写入的撤回仍只截刚写的一行
+    s.pushMessage(messages, { role: "user", content: "next" });
+    s.popMessage(messages);
+    assert.deepEqual(messages, [{ role: "user", content: "keep" }]);
+    assert.deepEqual(s.loadMessages(file), messages);
+  });
+
   test("还没建档时只退内存", () => {
     const messages: Message[] = [{ role: "user", content: "mem" }];
     s.popMessage(messages);
@@ -254,6 +303,82 @@ describe("压缩切口与 loadMessages", () => {
   test("没有 writer 时 commitCompact 什么都不写", () => {
     s.commitCompact({ role: "summary", text: "S", files: { read: [], modified: [] } }, []);
     assert.equal(existsSync(dir), false);
+  });
+
+  test("分隔写上后后面一行失败：截回原长度，没有新的 compact 分隔，内存消息不变", () => {
+    const messages: Message[] = [];
+    s.pushMessage(messages, { role: "user", content: "old question" });
+    s.pushMessage(messages, { role: "user", content: "recent" });
+    const file = s.sessionFile()!;
+    const before = readFileSync(file);
+    const mem = structuredClone(messages);
+    const past = new Date("2020-01-01T00:00:00.000Z");
+    utimesSync(file, past, past);
+    const stamped = statSync(file).mtimeMs;
+    const real = s.openSession(file);
+    // 分隔先落盘，摘要那次追加故意失败
+    s.bindSession({
+      file,
+      name: s.sessionName() ?? "",
+      append(entry) {
+        if ((entry as { type?: string }).type === "message") throw new Error("summary write failed");
+        real.append(entry);
+      },
+      markCompact() {
+        real.markCompact();
+      },
+      dropLast() {
+        real.dropLast();
+      },
+    });
+    const summary = { role: "summary" as const, text: "S", files: { read: [] as string[], modified: [] as string[] } };
+    assert.throws(() => s.commitCompact(summary, [messages[1]!]), { message: "summary write failed" });
+    assert.ok(statSync(file).mtimeMs > stamped);
+    assert.deepEqual(readFileSync(file), before);
+    assert.equal(lines(file).some((l) => JSON.parse(l).type === "compact"), false);
+    assert.deepEqual(messages, mem);
+    assert.deepEqual(s.loadMessages(file), mem);
+  });
+
+  test("空间只够分隔行、不够摘要时预检拒绝，文件字节一个都不变，内存消息不变", () => {
+    const messages: Message[] = [];
+    s.pushMessage(messages, { role: "user", content: "keep me" });
+    const file = s.sessionFile()!;
+    const head = readFileSync(file);
+    // 分隔加补上的换行放得下，再加上摘要就超过 32MB
+    const room = Buffer.byteLength(JSON.stringify({ type: "compact", createdAt: new Date().toISOString() }) + "\n") + 1;
+    truncateSync(file, SESSION_MAX - room);
+    const past = new Date("2020-01-01T00:00:00.000Z");
+    utimesSync(file, past, past);
+    const stamped = statSync(file).mtimeMs;
+    const mem = structuredClone(messages);
+    const summary = { role: "summary" as const, text: "S", files: { read: [] as string[], modified: [] as string[] } };
+    assert.throws(() => s.commitCompact(summary, []), { message: `session file exceeds ${SESSION_MAX} bytes` });
+    assert.equal(statSync(file).mtimeMs, stamped);
+    assert.equal(statSync(file).size, SESSION_MAX - room);
+    assert.deepEqual(readSlice(file, head.length, 0), head);
+    assert.equal(readSlice(file, 64, SESSION_MAX - room - 64).includes(Buffer.from("compact")), false);
+    assert.deepEqual(messages, mem);
+    assert.deepEqual(s.loadMessages(file), mem);
+  });
+
+  test("末尾不是换行、补上这一字节就会超限时预检拒绝，文件字节不变", () => {
+    const messages: Message[] = [];
+    s.pushMessage(messages, { role: "user", content: "keep me" });
+    const file = s.sessionFile()!;
+    const head = readFileSync(file);
+    const summary = { role: "summary" as const, text: "S", files: { read: [] as string[], modified: [] as string[] } };
+    const payload = plannedBytes(summary, []);
+    // 不算补上的换行刚好到顶，算上就超。延长后最后一个字节是 0，不是换行
+    truncateSync(file, SESSION_MAX - payload);
+    const past = new Date("2020-01-01T00:00:00.000Z");
+    utimesSync(file, past, past);
+    const stamped = statSync(file).mtimeMs;
+    assert.throws(() => s.commitCompact(summary, []), { message: `session file exceeds ${SESSION_MAX} bytes` });
+    assert.equal(statSync(file).mtimeMs, stamped);
+    assert.equal(statSync(file).size, SESSION_MAX - payload);
+    assert.deepEqual(readSlice(file, head.length, 0), head);
+    assert.equal(readSlice(file, 1, SESSION_MAX - payload - 1)[0], 0);
   });
 });
 

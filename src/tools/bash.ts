@@ -6,10 +6,11 @@ import { truncate } from "./truncate.ts";
 export function bashTool(input: any, abort?: AbortSignal): Promise<string> {
   return new Promise((done) => {
     // 第一个参数是整条命令；shell:true 才走 sh -c
+    // stdin 忽略：读标准输入的命令马上得到结束，不会一直等
     // detached：在 POSIX 上自成一个进程组，kill(-pid) 才能连子进程一起杀。只杀 sh 的话，
     // 子进程还占着输出管道，close 要等它自己跑完
     const posix = process.platform !== "win32";
-    const child = spawn(String(input.command), { shell: true, detached: posix });
+    const child = spawn(String(input.command), { shell: true, detached: posix, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     let reason: "interrupted" | "timeout" | undefined;
     const signal = (sig: NodeJS.Signals) => {
